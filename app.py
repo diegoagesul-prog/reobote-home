@@ -153,6 +153,7 @@ base_html = """
 </div>
 
 <script>
+let tsServ = null;
 let tsFunc = null;
 let tsIns = null;
 
@@ -228,9 +229,23 @@ function addIns(){
 document.addEventListener("DOMContentLoaded", () => {
   setServicoUnidade();
 
+  const servSelect = document.getElementById("servico_select");
   const funcSelect = document.getElementById("func_select");
-  const insSelect = document.getElementById("ins_select");
+  const insSelect  = document.getElementById("ins_select");
 
+  // Autocomplete SERVIÇO
+  if(servSelect && !tsServ){
+    tsServ = new TomSelect("#servico_select", {
+      create: false,
+      placeholder: "Digite para buscar serviço...",
+      allowEmptyOption: true,
+      maxItems: 1,
+      sortField: { field: "text", direction: "asc" },
+      onChange: function(){ setServicoUnidade(); }
+    });
+  }
+
+  // Autocomplete FUNÇÃO
   if(funcSelect && !tsFunc){
     tsFunc = new TomSelect("#func_select", {
       create: false,
@@ -241,6 +256,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Autocomplete INSUMO
   if(insSelect && !tsIns){
     tsIns = new TomSelect("#ins_select", {
       create: false,
@@ -259,6 +275,14 @@ document.addEventListener("DOMContentLoaded", () => {
 </body>
 </html>
 """
+
+
+# =============================
+# PING (para UptimeRobot)
+# =============================
+@app.route("/ping")
+def ping():
+    return "ok", 200
 
 
 # =============================
@@ -444,7 +468,7 @@ def dashboard():
                placeholder="Horas trabalhadas" required>
 
         <div class="line">
-          <h5>Funções (autocomplete)</h5>
+          <h5>Funções</h5>
           <div class="row g-2">
             <div class="col-md-6">
               <select class="form-control" id="func_select">
@@ -464,7 +488,7 @@ def dashboard():
         </div>
 
         <div class="line">
-          <h5>Insumos (autocomplete)</h5>
+          <h5>Insumos</h5>
           <div class="row g-2">
             <div class="col-md-6">
               <select class="form-control" id="ins_select">
