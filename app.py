@@ -1,5 +1,6 @@
 from flask import Flask, render_template_string, request, redirect, session, send_file
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import Workbook
 from datetime import datetime
@@ -15,11 +16,12 @@ app.secret_key = os.environ.get("SECRET_KEY", "reobote_home_secret")
 # DB
 # =============================
 def get_db():
-    # ONLINE: setar DATA_DIR=/var/data (Render Disk)
-    # LOCAL: usa a pasta do projeto
-    base_dir = os.environ.get("DATA_DIR", os.path.dirname(__file__))
-    db_path = os.path.join(base_dir, "banco.db")
-    return sqlite3.connect(db_path)
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL não configurada.")
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    return psycopg2.connect(db_url)
 
 
 def table_columns(conn, table_name: str) -> set[str]:
@@ -879,4 +881,5 @@ def exportar():
 # =============================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
+
     app.run(host="0.0.0.0", port=port, debug=False)
