@@ -2,3 +2,4 @@ Flask
 Werkzeug
 openpyxl
 gunicorn
+psycopg2-binary
