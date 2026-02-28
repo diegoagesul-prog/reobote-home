@@ -85,7 +85,7 @@ def ping():
 
 @app.route("/manifest.json")
 def manifest():
-    data = {"name":"Reobote Home","short_name":"Reobote","description":"Registro de Produtividade e Consumo",
+    data = {"name":"Reobote Home","short_name":"Reobote Produtividade","description":"Registro de Produtividade e Consumo",
             "start_url":"/dashboard","display":"standalone","background_color":"#1a1a2e","theme_color":"#1a1a2e",
             "icons":[{"src":"/static/icon-192.png","sizes":"192x192","type":"image/png"},
                      {"src":"/static/icon-512.png","sizes":"512x512","type":"image/png"}]}
@@ -290,6 +290,9 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(fs&&!tsF)tsF=new TomSelect("#func_select",{create:false,placeholder:"Buscar funcao...",allowEmptyOption:true,maxItems:1,sortField:{field:"text",direction:"asc"}});
   if(is_&&!tsI)tsI=new TomSelect("#ins_select",{create:false,placeholder:"Buscar insumo...",allowEmptyOption:true,maxItems:1,sortField:{field:"text",direction:"asc"},onChange:function(){updInsUnid();}});
   updInsUnid();
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('/static/sw.js');
+  }
 });
 </script>
 </body>
@@ -780,4 +783,5 @@ def exportar():
 if __name__=="__main__":
     port=int(os.environ.get("PORT","5000"))
     app.run(host="0.0.0.0",port=port,debug=False)
+
 
