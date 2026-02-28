@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, redirect, session, send_file, abort
+from flask import Flask, render_template_string, request, redirect, session, send_file, abort, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import Workbook
 from datetime import datetime
@@ -13,34 +13,22 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "reobote_home_secret")
 
 
-# =============================
-# POSTGRES CONNECTION
-# =============================
 def get_db():
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
-        raise RuntimeError("DATABASE_URL não configurada (Render → Web Service → Environment).")
-
+        raise RuntimeError("DATABASE_URL nao configurada.")
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
-
     return psycopg2.connect(db_url)
 
 
 def safe_json_load(x):
-    if x is None:
-        return {}
-    if isinstance(x, (dict, list)):
-        return x
-    try:
-        return json.loads(x)
-    except Exception:
-        return {}
+    if x is None: return {}
+    if isinstance(x, (dict, list)): return x
+    try: return json.loads(x)
+    except: return {}
 
 
-# =============================
-# CSRF (simples)
-# =============================
 def csrf_token():
     tok = session.get("_csrf")
     if not tok:
@@ -50,1429 +38,746 @@ def csrf_token():
 
 
 def require_csrf():
-    tok_form = request.form.get("_csrf", "")
-    tok_sess = session.get("_csrf", "")
-    if not tok_form or not tok_sess or tok_form != tok_sess:
-        abort(400, description="CSRF inválido. Recarregue a página e tente novamente.")
+    if request.form.get("_csrf","") != session.get("_csrf",""):
+        abort(400)
 
 
-# =============================
-# AUTH HELPERS
-# =============================
 def is_admin():
     return session.get("tipo") == "admin"
 
 
 def require_login():
-    if "user_id" not in session:
-        return False
-    return True
+    return "user_id" in session
 
 
-def password_policy_ok(pw: str):
+def password_policy_ok(pw):
     pw = pw or ""
-    if len(pw) < 8:
-        return False, "A senha deve ter pelo menos 8 caracteres."
-    has_letter = any(c.isalpha() for c in pw)
-    has_digit = any(c.isdigit() for c in pw)
-    if not (has_letter and has_digit):
-        return False, "A senha deve ter pelo menos 1 letra e 1 número."
+    if len(pw) < 8: return False, "Minimo 8 caracteres."
+    if not any(c.isalpha() for c in pw) or not any(c.isdigit() for c in pw):
+        return False, "Pelo menos 1 letra e 1 numero."
     return True, ""
 
 
-# =============================
-# INIT DB (Postgres)
-# =============================
 def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS usuarios (
-        id SERIAL PRIMARY KEY,
-        nome TEXT,
-        email TEXT UNIQUE,
-        senha TEXT,
-        tipo TEXT
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS obras (
-        id SERIAL PRIMARY KEY,
-        nome TEXT UNIQUE
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS servicos (
-        id SERIAL PRIMARY KEY,
-        nome TEXT UNIQUE,
-        unidade TEXT
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS insumos (
-        id SERIAL PRIMARY KEY,
-        nome TEXT UNIQUE,
-        unidade TEXT
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS funcoes (
-        id SERIAL PRIMARY KEY,
-        nome TEXT UNIQUE
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS produtividade (
-        id SERIAL PRIMARY KEY,
-        obra TEXT,
-        servico TEXT,
-        servico_unidade TEXT,
-        quantidade DOUBLE PRECISION,
-        horas DOUBLE PRECISION,
-        funcoes JSONB,
-        insumos JSONB,
-        observacao TEXT,
-        data TEXT,
-        user_id INTEGER
-    );
-    """)
-
-    # Admin via ENV (recomendado): ADMIN_EMAIL e ADMIN_PASSWORD
-    admin_email = os.environ.get("ADMIN_EMAIL")
-    admin_pass = os.environ.get("ADMIN_PASSWORD")
-    if admin_email and admin_pass:
-        ok, _ = password_policy_ok(admin_pass)
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, email TEXT UNIQUE, senha TEXT, tipo TEXT);")
+    cur.execute("CREATE TABLE IF NOT EXISTS obras (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
+    cur.execute("CREATE TABLE IF NOT EXISTS servicos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
+    cur.execute("CREATE TABLE IF NOT EXISTS insumos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
+    cur.execute("CREATE TABLE IF NOT EXISTS funcoes (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
+    cur.execute("CREATE TABLE IF NOT EXISTS produtividade (id SERIAL PRIMARY KEY, obra TEXT, servico TEXT, servico_unidade TEXT, quantidade DOUBLE PRECISION, horas DOUBLE PRECISION, funcoes JSONB, insumos JSONB, observacao TEXT, data TEXT, user_id INTEGER);")
+    ae = os.environ.get("ADMIN_EMAIL"); ap = os.environ.get("ADMIN_PASSWORD")
+    if ae and ap:
+        ok, _ = password_policy_ok(ap)
         if ok:
-            senha_hash = generate_password_hash(admin_pass)
-            cur.execute("""
-              INSERT INTO usuarios (nome, email, senha, tipo)
-              VALUES (%s, %s, %s, %s)
-              ON CONFLICT (email) DO NOTHING;
-            """, ("Administrador", admin_email.strip().lower(), senha_hash, "admin"))
-
-    conn.commit()
-    cur.close()
-    conn.close()
+            cur.execute("INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING;",
+                        ("Administrador", ae.strip().lower(), generate_password_hash(ap), "admin"))
+    conn.commit(); cur.close(); conn.close()
 
 
 init_db()
 
 
-# =============================
-# TEMPLATE BASE
-# =============================
-base_html = """
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Registro de Produtividade e Consumo</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
-  <!-- Tom Select (autocomplete) -->
-  <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
-
-  <style>
-    body { background: #f8f9fa; }
-    .card { margin-bottom: 20px; }
-    h2 { color: #0d6efd; }
-    .mini { font-size: .92rem; color: #6c757d; }
-    .badge-item { margin-right: 6px; margin-bottom: 6px; display:inline-block; }
-    .line { border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
-    .ts-control { padding: .375rem .75rem; border-radius: .375rem; }
-    .table-sm td, .table-sm th { vertical-align: middle; }
-  </style>
-</head>
-<body>
-<div class="container mt-4">
-  <div class="text-center mb-4">
-    <img src="/static/logo.png" width="120"><br>
-    <h2 class="mt-2">REGISTRO DE PRODUTIVIDADE E CONSUMO</h2>
-    <hr>
-  </div>
-  {{ conteudo|safe }}
-</div>
-
-<script>
-let tsServ = null;
-let tsFunc = null;
-let tsIns = null;
-
-function setServicoUnidade(){
-  const sel = document.getElementById("servico_select");
-  const uni = document.getElementById("servico_unidade");
-  if(!sel || !uni) return;
-  const opt = sel.selectedOptions && sel.selectedOptions[0];
-  uni.value = (opt && opt.dataset && opt.dataset.unidade) ? opt.dataset.unidade : "";
-}
-
-function getInsumoUnidadeByValue(val){
-  const sel = document.getElementById("ins_select");
-  if(!sel) return "un";
-  const opt = Array.from(sel.options).find(o => o.value === val);
-  if(!opt) return "un";
-  return (opt.dataset && opt.dataset.unidade) ? opt.dataset.unidade : "un";
-}
-
-function updateInsumoUnidFromSelected(){
-  const sel = document.getElementById("ins_select");
-  const unidEl = document.getElementById("ins_unid");
-  if(!sel || !unidEl) return;
-  unidEl.value = getInsumoUnidadeByValue(sel.value);
-}
-
-function addFunc(){
-  const sel = document.getElementById("func_select");
-  const nome = sel ? sel.value : "";
-  const qtdEl = document.getElementById("func_qtd");
-  const qtd = qtdEl ? (qtdEl.value || "0") : "0";
-  if(!nome) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "badge bg-light text-dark badge-item p-2";
-  wrap.innerHTML = `
-    <strong>${nome}</strong> - ${qtd}
-    <button type="button" class="btn btn-sm btn-danger ms-2" onclick="this.parentElement.remove()">x</button>
-    <input type="hidden" name="funcoes_nome[]" value="${nome}">
-    <input type="hidden" name="funcoes_qtd[]" value="${qtd}">
-  `;
-  document.getElementById("func_list").appendChild(wrap);
-
-  if(tsFunc) tsFunc.clear(true);
-  if(qtdEl) qtdEl.value = "1";
-}
-
-function addIns(){
-  const sel = document.getElementById("ins_select");
-  const nome = sel ? sel.value : "";
-  const qtdEl = document.getElementById("ins_qtd");
-  const qtd = qtdEl ? (qtdEl.value || "0") : "0";
-  const unidEl = document.getElementById("ins_unid");
-  const unid = unidEl ? (unidEl.value || "un") : "un";
-  if(!nome) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "badge bg-light text-dark badge-item p-2";
-  wrap.innerHTML = `
-    <strong>${nome}</strong> - ${qtd} ${unid}
-    <button type="button" class="btn btn-sm btn-danger ms-2" onclick="this.parentElement.remove()">x</button>
-    <input type="hidden" name="insumos_nome[]" value="${nome}">
-    <input type="hidden" name="insumos_qtd[]" value="${qtd}">
-    <input type="hidden" name="insumos_unid[]" value="${unid}">
-  `;
-  document.getElementById("ins_list").appendChild(wrap);
-
-  if(tsIns) tsIns.clear(true);
-  if(qtdEl) qtdEl.value = "1";
-  if(unidEl) unidEl.value = "un";
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  setServicoUnidade();
-
-  const servSelect = document.getElementById("servico_select");
-  const funcSelect = document.getElementById("func_select");
-  const insSelect  = document.getElementById("ins_select");
-
-  if(servSelect && !tsServ){
-    tsServ = new TomSelect("#servico_select", {
-      create: false,
-      placeholder: "Digite para buscar serviço...",
-      allowEmptyOption: true,
-      maxItems: 1,
-      sortField: { field: "text", direction: "asc" },
-      onChange: function(){ setServicoUnidade(); }
-    });
-  }
-
-  if(funcSelect && !tsFunc){
-    tsFunc = new TomSelect("#func_select", {
-      create: false,
-      placeholder: "Digite para buscar função...",
-      allowEmptyOption: true,
-      maxItems: 1,
-      sortField: { field: "text", direction: "asc" }
-    });
-  }
-
-  if(insSelect && !tsIns){
-    tsIns = new TomSelect("#ins_select", {
-      create: false,
-      placeholder: "Digite para buscar insumo...",
-      allowEmptyOption: true,
-      maxItems: 1,
-      sortField: { field: "text", direction: "asc" },
-      onChange: function(){ updateInsumoUnidFromSelected(); }
-    });
-  }
-
-  updateInsumoUnidFromSelected();
-});
-</script>
-
-</body>
-</html>
-"""
-
-
-# =============================
-# PING
-# =============================
 @app.route("/ping")
 def ping():
     return "ok", 200
 
 
-# =============================
-# LOGIN
-# =============================
-@app.route("/", methods=["GET", "POST"])
-def login():
-    msg = ""
-    if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        senha = request.form.get("senha", "").strip()
+@app.route("/manifest.json")
+def manifest():
+    data = {"name":"Reobote Home","short_name":"Reobote","description":"Registro de Produtividade e Consumo",
+            "start_url":"/dashboard","display":"standalone","background_color":"#1a1a2e","theme_color":"#1a1a2e",
+            "icons":[{"src":"/static/icon-192.png","sizes":"192x192","type":"image/png"},
+                     {"src":"/static/icon-512.png","sizes":"512x512","type":"image/png"}]}
+    return Response(json.dumps(data), mimetype="application/json")
 
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id, nome, email, senha, tipo FROM usuarios WHERE email = %s", (email,))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
 
-        if user and check_password_hash(user[3], senha):
-            session["user_id"] = user[0]
-            session["nome"] = user[1] or ""
-            session["tipo"] = user[4] or "usuario"
-            csrf_token()  # garante token
-            return redirect("/dashboard")
-        msg = "⚠️ Login inválido!"
+BASE = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Reobote Home</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#1a1a2e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reobote">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --gold:#C9933A;--gold-l:#E0B060;--gold-d:#8a6420;
+  --dark:#1a1a2e;--dark2:#16213e;
+  --bg:#f2f0ec;--card:#fff;
+  --text:#1a1a2e;--muted:#6b7280;
+  --border:#e5e7eb;
+  --ok:#16a34a;--err:#dc2626;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);font-family:'Inter',sans-serif;color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;}
 
-    conteudo = f"""
-    <div class="card p-4">
-      <h4>Login</h4>
-      <form method="POST">
-        <input class="form-control mb-2" name="email" placeholder="Email" required>
-        <input class="form-control mb-2" name="senha" type="password" placeholder="Senha" required>
-        <button class="btn btn-primary w-100">Entrar</button>
-      </form>
-      <p class="text-danger mt-2">{msg}</p>
-      <div class="mini mt-3">
-        Dica: após entrar, você pode trocar sua senha em <strong>Minha senha</strong>.
-      </div>
+/* HEADER */
+.hdr{background:var(--dark);height:56px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;border-bottom:2px solid var(--gold);}
+.hdr-brand{display:flex;align-items:center;gap:9px;}
+.hdr-logo{height:30px;width:auto;}
+.hdr-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.05rem;color:var(--gold);letter-spacing:.07em;line-height:1;}
+.hdr-sub{font-size:.58rem;color:rgba(255,255,255,.35);letter-spacing:.12em;text-transform:uppercase;display:block;margin-top:2px;}
+.hdr-right{text-align:right;}
+.hdr-uname{font-size:.72rem;font-weight:600;color:#fff;white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis;}
+.hdr-links{display:flex;gap:6px;justify-content:flex-end;margin-top:2px;}
+.hdr-links a{font-size:.65rem;color:var(--gold);text-decoration:none;font-weight:500;}
+.hdr-links a:hover{color:var(--gold-l);}
+
+/* WRAP */
+.wrap{max-width:540px;margin:0 auto;padding:14px 12px 72px;}
+
+/* CARD */
+.card{background:var(--card);border-radius:14px;padding:18px 15px;margin-bottom:13px;border:1px solid var(--border);box-shadow:0 1px 3px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.04);}
+.ctitle{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1rem;letter-spacing:.07em;text-transform:uppercase;color:var(--dark);margin-bottom:15px;display:flex;align-items:center;gap:8px;}
+.ctitle::before{content:'';display:block;width:3px;height:16px;background:var(--gold);border-radius:2px;flex-shrink:0;}
+.stitle{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.75rem;letter-spacing:.1em;text-transform:uppercase;color:var(--gold-d);margin:17px 0 9px;padding-top:15px;border-top:1px solid var(--border);}
+
+/* FIELDS */
+.fl{margin-bottom:10px;}
+.fl-label{display:block;font-size:.7rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}
+input[type=text],input[type=email],input[type=password],input[type=number],select,textarea{
+  width:100%;padding:12px 13px;border:1.5px solid var(--border);border-radius:10px;
+  font-size:.97rem;font-family:'Inter',sans-serif;color:var(--text);background:#fff;
+  transition:border-color .15s,box-shadow .15s;-webkit-appearance:none;appearance:none;}
+input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,147,58,.15);outline:none;}
+input[readonly],input[disabled]{background:#f9f7f3;color:var(--muted);}
+textarea{resize:vertical;min-height:74px;}
+
+/* TOM SELECT */
+.ts-wrapper{width:100%;}
+.ts-control{border:1.5px solid var(--border)!important;border-radius:10px!important;padding:11px 13px!important;font-size:.97rem!important;font-family:'Inter',sans-serif!important;min-height:47px!important;background:#fff!important;box-shadow:none!important;}
+.ts-wrapper.focus .ts-control{border-color:var(--gold)!important;box-shadow:0 0 0 3px rgba(201,147,58,.15)!important;}
+.ts-dropdown{border:1.5px solid var(--border)!important;border-radius:10px!important;font-family:'Inter',sans-serif!important;box-shadow:0 8px 24px rgba(0,0,0,.12)!important;margin-top:4px!important;}
+.ts-dropdown .option{padding:11px 13px!important;font-size:.93rem!important;}
+.ts-dropdown .option:hover,.ts-dropdown .option.active{background:#fdf5e8!important;color:var(--gold-d)!important;}
+
+/* ADD ROW */
+.add-row{display:flex;gap:8px;align-items:center;}
+.add-row .ts-wrapper{flex:1 1 0;min-width:0;}
+.qty-box{width:66px!important;flex-shrink:0;text-align:center;padding:12px 6px!important;}
+.upill{flex-shrink:0;min-width:40px;height:47px;display:flex;align-items:center;justify-content:center;background:#fdf5e8;border:1.5px solid #f0d5a0;border-radius:10px;font-size:.73rem;font-weight:700;color:var(--gold-d);letter-spacing:.04em;padding:0 8px;}
+.btn-plus{flex-shrink:0;width:47px;height:47px;border-radius:10px;border:none;background:var(--dark);color:var(--gold);font-size:1.5rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s;}
+.btn-plus:hover{background:var(--dark2);}
+
+/* TAGS */
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;min-height:4px;}
+.tag{display:inline-flex;align-items:center;gap:5px;background:#fdf5e8;border:1px solid #f0d5a0;border-radius:20px;padding:5px 8px 5px 11px;font-size:.81rem;color:var(--gold-d);font-weight:600;}
+.tag-x{width:19px;height:19px;border-radius:50%;border:none;background:#f0d5a0;color:var(--gold-d);font-size:.68rem;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;}
+.tag-x:hover{background:var(--gold);color:#fff;}
+
+/* BUTTONS */
+.btn{display:block;width:100%;padding:13px;border:none;border-radius:10px;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.97rem;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;text-align:center;text-decoration:none;transition:filter .15s,transform .1s;}
+.btn:active{transform:scale(.98);}
+.btn:hover{filter:brightness(1.08);}
+.btn-gold{background:var(--gold);color:var(--dark);}
+.btn-dark{background:var(--dark);color:var(--gold);}
+.btn-green{background:#16a34a;color:#fff;margin-top:6px;}
+.btn-warn{background:#d97706;color:#fff;}
+.btn-info{background:#0891b2;color:#fff;}
+.btn-purple{background:#7c3aed;color:#fff;}
+.btn-sm{display:inline-flex;align-items:center;padding:5px 11px;border-radius:8px;font-size:.76rem;font-weight:600;cursor:pointer;border:1.5px solid;background:transparent;font-family:'Inter',sans-serif;text-decoration:none;white-space:nowrap;}
+.btn-edit{border-color:var(--gold);color:var(--gold-d);}
+.btn-edit:hover{background:#fdf5e8;}
+.btn-del{border-color:var(--err);color:var(--err);}
+.btn-del:hover{background:#fef2f2;}
+
+/* ALERTS */
+.alert{padding:10px 13px;border-radius:10px;font-size:.87rem;font-weight:500;margin-bottom:12px;}
+.a-ok{background:#dcfce7;border:1px solid #86efac;color:#15803d;}
+.a-err{background:#fef9c3;border:1px solid #fde047;color:#854d0e;}
+.a-danger{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;}
+
+/* REG CARDS */
+.rc{background:#fafaf8;border:1px solid var(--border);border-radius:10px;padding:12px 13px;margin-bottom:8px;}
+.rc-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:3px;}
+.rc-obra{font-weight:700;font-size:.91rem;color:var(--dark);}
+.rc-date{font-size:.7rem;color:var(--muted);white-space:nowrap;}
+.rc-srv{font-size:.81rem;color:var(--muted);margin-bottom:5px;line-height:1.3;}
+.rc-nums{display:flex;gap:13px;font-size:.77rem;color:var(--muted);margin-bottom:7px;}
+.rc-nums strong{color:var(--dark);font-weight:600;}
+.rc-act{display:flex;gap:7px;align-items:center;}
+
+/* ADMIN GRID */
+.agrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;}
+
+/* LOGIN */
+.login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px;background:var(--dark);}
+.login-logo{height:52px;margin-bottom:6px;}
+.login-sub{font-family:'Rajdhani',sans-serif;font-size:.7rem;letter-spacing:.18em;color:rgba(255,255,255,.3);text-transform:uppercase;margin-bottom:28px;}
+.login-card{background:#fff;border-radius:16px;padding:26px 22px;width:100%;max-width:350px;box-shadow:0 20px 60px rgba(0,0,0,.4);}
+.login-card h4{font-family:'Rajdhani',sans-serif;font-size:1.15rem;font-weight:700;letter-spacing:.06em;color:var(--dark);margin-bottom:18px;text-transform:uppercase;}
+
+.back{display:inline-flex;align-items:center;gap:5px;font-size:.81rem;font-weight:600;color:var(--gold-d);text-decoration:none;margin-bottom:12px;}
+.back:hover{color:var(--gold);}
+.mini{font-size:.74rem;color:var(--muted);}
+.clist{list-style:none;padding:0;margin-top:9px;}
+.clist li{padding:8px 11px;background:#fafaf8;border:1px solid var(--border);border-radius:8px;font-size:.87rem;margin-bottom:5px;}
+.utable{width:100%;border-collapse:collapse;font-size:.83rem;}
+.utable th{padding:7px 9px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:2px solid var(--border);}
+.utable td{padding:9px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.utable tr:last-child td{border-bottom:none;}
+</style>
+</head>
+<body>
+{% if show_header %}
+<header class="hdr">
+  <div class="hdr-brand">
+    <img src="/static/logo.png" class="hdr-logo" alt="Reobote">
+    <div>
+      <div class="hdr-name">REOBOTE HOME</div>
+      <span class="hdr-sub">Produtividade &amp; Consumo</span>
     </div>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
+  </div>
+  <div class="hdr-right">
+    <div class="hdr-uname">{{ session.get("nome","") }}</div>
+    <div class="hdr-links">
+      <a href="/minha_senha">Senha</a>
+      <span style="color:#374151">|</span>
+      <a href="/logout">Sair</a>
+    </div>
+  </div>
+</header>
+{% endif %}
+<div class="{% if show_header %}wrap{% else %}login-wrap{% endif %}">
+  {{ conteudo|safe }}
+</div>
+<script>
+let tsS=null,tsF=null,tsI=null;
+function setSrvUnid(){
+  const s=document.getElementById("servico_select"),u=document.getElementById("servico_unidade"),b=document.getElementById("sb");
+  if(!s||!u)return;
+  const o=s.options[s.selectedIndex],v=(o&&o.dataset&&o.dataset.unidade)?o.dataset.unidade:"";
+  u.value=v;if(b)b.textContent=v||"—";
+}
+function updInsUnid(){
+  const s=document.getElementById("ins_select"),b=document.getElementById("ib");
+  if(!s||!b)return;
+  const o=Array.from(s.options).find(x=>x.value===s.value);
+  b.textContent=(o&&o.dataset&&o.dataset.unidade)?o.dataset.unidade:"un";
+}
+function addFunc(){
+  const s=document.getElementById("func_select"),n=s?s.value:"",q=document.getElementById("fq");
+  const v=q?(q.value||"0"):"0";if(!n)return;
+  const t=document.createElement("div");t.className="tag";
+  t.innerHTML=`<span>${n} &mdash; ${v}</span><button type="button" class="tag-x" onclick="this.closest('.tag').remove()">x</button><input type="hidden" name="funcoes_nome[]" value="${n}"><input type="hidden" name="funcoes_qtd[]" value="${v}">`;
+  document.getElementById("fl").appendChild(t);
+  if(tsF)tsF.clear(true);if(q)q.value="1";
+}
+function addIns(){
+  const s=document.getElementById("ins_select"),n=s?s.value:"";
+  const q=document.getElementById("iq"),b=document.getElementById("ib");
+  const v=q?(q.value||"0"):"0",u=b?(b.textContent||"un"):"un";
+  if(!n)return;
+  const t=document.createElement("div");t.className="tag";
+  t.innerHTML=`<span>${n} &mdash; ${v} ${u}</span><button type="button" class="tag-x" onclick="this.closest('.tag').remove()">x</button><input type="hidden" name="insumos_nome[]" value="${n}"><input type="hidden" name="insumos_qtd[]" value="${v}"><input type="hidden" name="insumos_unid[]" value="${u}">`;
+  document.getElementById("il").appendChild(t);
+  if(tsI)tsI.clear(true);if(q)q.value="1";
+}
+document.addEventListener("DOMContentLoaded",()=>{
+  setSrvUnid();
+  const ss=document.getElementById("servico_select");
+  const fs=document.getElementById("func_select");
+  const is_=document.getElementById("ins_select");
+  if(ss&&!tsS)tsS=new TomSelect("#servico_select",{create:false,placeholder:"Buscar servico...",allowEmptyOption:true,maxItems:1,sortField:{field:"text",direction:"asc"},onChange:function(){setSrvUnid();}});
+  if(fs&&!tsF)tsF=new TomSelect("#func_select",{create:false,placeholder:"Buscar funcao...",allowEmptyOption:true,maxItems:1,sortField:{field:"text",direction:"asc"}});
+  if(is_&&!tsI)tsI=new TomSelect("#ins_select",{create:false,placeholder:"Buscar insumo...",allowEmptyOption:true,maxItems:1,sortField:{field:"text",direction:"asc"},onChange:function(){updInsUnid();}});
+  updInsUnid();
+});
+</script>
+</body>
+</html>"""
+
+
+def render(conteudo, show_header=True):
+    return render_template_string(BASE, conteudo=conteudo, show_header=show_header, session=session)
+
+
+def alert(msg):
+    if not msg: return ""
+    tipo, texto = msg.split(":",1)
+    cls = "a-ok" if tipo=="ok" else "a-err"
+    icon = "✓" if tipo=="ok" else "⚠"
+    return f'<div class="alert {cls}">{icon} {texto}</div>'
+
+
+@app.route("/", methods=["GET","POST"])
+def login():
+    msg=""
+    if request.method=="POST":
+        email=request.form.get("email","").strip().lower()
+        senha=request.form.get("senha","").strip()
+        conn=get_db();cur=conn.cursor()
+        cur.execute("SELECT id,nome,email,senha,tipo FROM usuarios WHERE email=%s",(email,))
+        user=cur.fetchone();cur.close();conn.close()
+        if user and check_password_hash(user[3],senha):
+            session["user_id"]=user[0];session["nome"]=user[1] or "";session["tipo"]=user[4] or "usuario"
+            csrf_token();return redirect("/dashboard")
+        msg="E-mail ou senha incorretos."
+    c=f"""<img src="/static/logo.png" class="login-logo" alt="Reobote">
+    <div class="login-sub">Produtividade &amp; Consumo</div>
+    <div class="login-card">
+      <h4>Acesso</h4>
+      {"<div class='alert a-danger'>"+msg+"</div>" if msg else ""}
+      <form method="POST">
+        <div class="fl"><label class="fl-label">E-mail</label><input type="email" name="email" placeholder="seu@email.com" required></div>
+        <div class="fl"><label class="fl-label">Senha</label><input type="password" name="senha" placeholder="••••••••" required></div>
+        <button class="btn btn-gold" style="margin-top:6px;">Entrar</button>
+      </form>
+      <div class="mini" style="margin-top:11px;text-align:center;">Troque sua senha apos o primeiro acesso.</div>
+    </div>"""
+    return render(c, show_header=False)
 
 
 @app.route("/logout")
 def logout():
-    session.clear()
-    return redirect("/")
+    session.clear();return redirect("/")
 
 
-# =============================
-# MINHA SENHA (usuário muda a própria senha)
-# =============================
-@app.route("/minha_senha", methods=["GET", "POST"])
+@app.route("/minha_senha", methods=["GET","POST"])
 def minha_senha():
-    if not require_login():
-        return redirect("/")
-
-    msg_ok = ""
-    msg_err = ""
-
-    if request.method == "POST":
+    if not require_login(): return redirect("/")
+    msg=""
+    if request.method=="POST":
         require_csrf()
-
-        senha_atual = request.form.get("senha_atual", "").strip()
-        nova = request.form.get("nova_senha", "").strip()
-        nova2 = request.form.get("nova_senha2", "").strip()
-
-        if nova != nova2:
-            msg_err = "⚠️ As senhas novas não conferem."
+        sa=request.form.get("senha_atual","").strip()
+        n=request.form.get("nova_senha","").strip()
+        n2=request.form.get("nova_senha2","").strip()
+        if n!=n2: msg="err:As senhas nao conferem."
         else:
-            ok, m = password_policy_ok(nova)
-            if not ok:
-                msg_err = f"⚠️ {m}"
+            ok,m=password_policy_ok(n)
+            if not ok: msg=f"err:{m}"
             else:
-                conn = get_db()
-                cur = conn.cursor()
-                cur.execute("SELECT senha FROM usuarios WHERE id=%s", (session["user_id"],))
-                row = cur.fetchone()
-
-                if not row or not check_password_hash(row[0], senha_atual):
-                    msg_err = "⚠️ Senha atual incorreta."
-                    cur.close()
-                    conn.close()
+                conn=get_db();cur=conn.cursor()
+                cur.execute("SELECT senha FROM usuarios WHERE id=%s",(session["user_id"],))
+                row=cur.fetchone()
+                if not row or not check_password_hash(row[0],sa): msg="err:Senha atual incorreta.";cur.close();conn.close()
                 else:
-                    cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s",
-                                (generate_password_hash(nova), session["user_id"]))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    msg_ok = "✅ Senha alterada com sucesso."
-
-    conteudo = f"""
-    <p><a href="/dashboard">← Voltar</a></p>
-    <div class="card p-4">
-      <h4>Minha senha</h4>
+                    cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s",(generate_password_hash(n),session["user_id"]))
+                    conn.commit();cur.close();conn.close();msg="ok:Senha alterada!"
+    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+    {alert(msg)}
+    <div class="card">
+      <div class="ctitle">Minha Senha</div>
       <form method="POST">
         <input type="hidden" name="_csrf" value="{csrf_token()}">
-        <label class="form-label">Senha atual</label>
-        <input class="form-control mb-2" type="password" name="senha_atual" required>
-
-        <label class="form-label">Nova senha</label>
-        <input class="form-control mb-2" type="password" name="nova_senha" required>
-
-        <label class="form-label">Confirmar nova senha</label>
-        <input class="form-control mb-3" type="password" name="nova_senha2" required>
-
-        <div class="mini mb-2">Regras: mínimo 8 caracteres, pelo menos 1 letra e 1 número.</div>
-        <button class="btn btn-primary w-100">Salvar</button>
+        <div class="fl"><label class="fl-label">Senha atual</label><input type="password" name="senha_atual" required></div>
+        <div class="fl"><label class="fl-label">Nova senha</label><input type="password" name="nova_senha" required></div>
+        <div class="fl"><label class="fl-label">Confirmar nova senha</label><input type="password" name="nova_senha2" required></div>
+        <div class="mini" style="margin-bottom:11px;">Minimo 8 caracteres, pelo menos 1 letra e 1 numero.</div>
+        <button class="btn btn-gold">Salvar</button>
       </form>
-
-      <p class="text-success mt-3">{msg_ok}</p>
-      <p class="text-danger">{msg_err}</p>
-    </div>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
-
-
-# =============================
-# DASHBOARD
-# =============================
-@app.route("/dashboard", methods=["GET", "POST"])
-def dashboard():
-    if not require_login():
-        return redirect("/")
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras = [o[0] for o in cur.fetchall()]
-
-    cur.execute("SELECT nome, COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos = cur.fetchall()
-
-    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes = [f[0] for f in cur.fetchall()]
-
-    cur.execute("SELECT nome, COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos = cur.fetchall()
-
-    msg = ""
-
-    if request.method == "POST":
-        require_csrf()
-
-        obra = request.form.get("obra", "").strip()
-        servico = request.form.get("servico", "").strip()
-        servico_unidade = request.form.get("servico_unidade", "").strip()
-        observacao = request.form.get("observacao", "").strip()
-
-        try:
-            quantidade = float(request.form.get("quantidade", "0"))
-        except ValueError:
-            quantidade = 0.0
-
-        try:
-            horas = float(request.form.get("horas", "0"))
-        except ValueError:
-            horas = 0.0
-
-        # Funções dict: {"Pedreiro": 2, ...}
-        funcoes_nomes = request.form.getlist("funcoes_nome[]")
-        funcoes_qtds = request.form.getlist("funcoes_qtd[]")
-        funcoes_usadas = {}
-        for nome, qtd in zip(funcoes_nomes, funcoes_qtds):
-            nome = (nome or "").strip()
-            try:
-                q = int(qtd)
-            except ValueError:
-                q = 0
-            if nome and q > 0:
-                funcoes_usadas[nome] = funcoes_usadas.get(nome, 0) + q
-
-        # Insumos dict: {"Cimento":{"quantidade":2,"unidade":"kg"}}
-        insumos_nomes = request.form.getlist("insumos_nome[]")
-        insumos_qtds = request.form.getlist("insumos_qtd[]")
-        insumos_unids = request.form.getlist("insumos_unid[]")
-        insumos_usados = {}
-        for nome, qtd, unid in zip(insumos_nomes, insumos_qtds, insumos_unids):
-            nome = (nome or "").strip()
-            unid = (unid or "").strip() or "un"
-            try:
-                q = float(qtd)
-            except ValueError:
-                q = 0.0
-            if nome and q > 0:
-                if nome in insumos_usados:
-                    insumos_usados[nome]["quantidade"] = float(insumos_usados[nome]["quantidade"]) + q
-                    insumos_usados[nome]["unidade"] = unid
-                else:
-                    insumos_usados[nome] = {"quantidade": q, "unidade": unid}
-
-        if obra and servico and servico_unidade and quantidade > 0 and horas > 0:
-            data = datetime.now().strftime("%d/%m/%Y")
-            cur.execute(
-                """INSERT INTO produtividade
-                   (obra, servico, servico_unidade, quantidade, horas, funcoes, insumos, observacao, data, user_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (
-                    obra, servico, servico_unidade, quantidade, horas,
-                    psycopg2.extras.Json(funcoes_usadas),
-                    psycopg2.extras.Json(insumos_usados),
-                    observacao, data, session["user_id"]
-                )
-            )
-            conn.commit()
-            msg = "✅ Registro salvo!"
-        else:
-            msg = "⚠️ Preencha Obra/Serviço/Unidade e informe Quantidade e Horas (> 0)."
-
-    # Registros recentes (20)
-    if is_admin():
-        cur.execute("""
-          SELECT p.id, p.data, p.obra, p.servico, p.quantidade, p.horas, u.nome
-          FROM produtividade p
-          LEFT JOIN usuarios u ON u.id = p.user_id
-          ORDER BY p.id DESC
-          LIMIT 20
-        """)
-    else:
-        cur.execute("""
-          SELECT p.id, p.data, p.obra, p.servico, p.quantidade, p.horas, u.nome
-          FROM produtividade p
-          LEFT JOIN usuarios u ON u.id = p.user_id
-          WHERE p.user_id = %s
-          ORDER BY p.id DESC
-          LIMIT 20
-        """, (session["user_id"],))
-    recent = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    obras_opt = "".join([f'<option value="{o}">{o}</option>' for o in obras])
-
-    servicos_opt = ""
-    for s, un in servicos:
-        servicos_opt += f'<option value="{s}" data-unidade="{un}">{s} ({un})</option>'
-
-    funcoes_opt = "".join([f'<option value="{f}">{f}</option>' for f in funcoes])
-
-    insumos_opt = ""
-    for nome, unid in insumos:
-        insumos_opt += f'<option value="{nome}" data-unidade="{unid}">{nome} ({unid})</option>'
-
-    export_btn = ""
-    admin_links = ""
-    if is_admin():
-        export_btn = '<a href="/exportar" class="btn btn-secondary mb-2">Exportar Excel (Power BI)</a>'
-        admin_links = """
-        <hr>
-        <a href="/criar_usuario" class="btn btn-warning mb-2">Criar Usuário</a>
-        <a href="/cadastros" class="btn btn-info mb-2">Cadastros</a>
-        <a href="/usuarios" class="btn btn-danger mb-2">Gerenciar Usuários</a>
-        """
-
-    # Tabela registros recentes
-    rows = ""
-    for rid, data, obra, servico, qtd, horas, user_nome in recent:
-        edit_link = f'/produtividade/editar/{rid}'
-        del_form = f"""
-          <form method="POST" action="/produtividade/excluir/{rid}" style="display:inline;">
-            <input type="hidden" name="_csrf" value="{csrf_token()}">
-            <button class="btn btn-sm btn-outline-danger"
-                    onclick="return confirm('Excluir este registro?');">Excluir</button>
-          </form>
-        """
-        rows += f"""
-        <tr>
-          <td>{rid}</td>
-          <td>{data or ""}</td>
-          <td>{obra or ""}</td>
-          <td>{servico or ""}</td>
-          <td>{qtd or ""}</td>
-          <td>{horas or ""}</td>
-          <td>{user_nome or ""}</td>
-          <td>
-            <a class="btn btn-sm btn-outline-primary" href="{edit_link}">Editar</a>
-            {del_form}
-          </td>
-        </tr>
-        """
-
-    conteudo = f"""
-    <div class="d-flex justify-content-between align-items-center">
-      <div>
-        <p class="mb-1"><strong>Logado como:</strong> {session['nome']} ({session['tipo']})</p>
-        <p class="mb-0">
-          <a href="/minha_senha">Minha senha</a> |
-          <a href="/logout">Sair</a>
-        </p>
-      </div>
-    </div>
-
-    <p class="text-success mt-2">{msg}</p>
-
-    <div class="card p-4">
-      <h4>Registro de Produtividade e Consumo</h4>
-      <form method="POST">
-        <input type="hidden" name="_csrf" value="{csrf_token()}">
-
-        <select class="form-control mb-2" name="obra" required>
-          <option value="">Selecione obra</option>
-          {obras_opt}
-        </select>
-
-        <select class="form-control mb-2" name="servico" id="servico_select" required onchange="setServicoUnidade()">
-          <option value="">Selecione serviço</option>
-          {servicos_opt}
-        </select>
-
-        <input class="form-control mb-2" name="servico_unidade" id="servico_unidade"
-               placeholder="Unidade do serviço" readonly required>
-
-        <input class="form-control mb-2" name="quantidade" type="number" step="0.01"
-               placeholder="Quantidade executada" required>
-
-        <input class="form-control mb-3" name="horas" type="number" step="0.1"
-               placeholder="Horas trabalhadas" required>
-
-        <div class="line">
-          <h5>Funções</h5>
-          <div class="row g-2">
-            <div class="col-md-6">
-              <select class="form-control" id="func_select">
-                <option value="">Selecione / digite...</option>
-                {funcoes_opt}
-              </select>
-            </div>
-            <div class="col-md-4">
-              <input class="form-control" type="number" id="func_qtd" min="1" step="1" placeholder="Qtd" value="1">
-            </div>
-            <div class="col-md-2">
-              <button type="button" class="btn btn-primary w-100" onclick="addFunc()">Adicionar</button>
-            </div>
-          </div>
-          <div class="mt-2 mini">Itens adicionados:</div>
-          <div id="func_list" class="mt-1"></div>
-        </div>
-
-        <div class="line">
-          <h5>Insumos</h5>
-          <div class="row g-2">
-            <div class="col-md-6">
-              <select class="form-control" id="ins_select">
-                <option value="">Selecione / digite...</option>
-                {insumos_opt}
-              </select>
-            </div>
-            <div class="col-md-3">
-              <input class="form-control" type="number" id="ins_qtd" min="0" step="0.01" placeholder="Qtd" value="1">
-            </div>
-            <div class="col-md-1">
-              <input class="form-control" type="text" id="ins_unid" placeholder="un" readonly>
-            </div>
-            <div class="col-md-2">
-              <button type="button" class="btn btn-primary w-100" onclick="addIns()">Adicionar</button>
-            </div>
-          </div>
-          <div class="mt-2 mini">Itens adicionados:</div>
-          <div id="ins_list" class="mt-1"></div>
-        </div>
-
-        <textarea class="form-control mb-2" name="observacao" placeholder="Observações"></textarea>
-        <button class="btn btn-success w-100">Salvar</button>
-      </form>
-    </div>
-
-    <div class="card p-4">
-      <h5>Registros recentes</h5>
-      <div class="mini mb-2">{'Mostrando últimos 20 (todos).' if is_admin() else 'Mostrando seus últimos 20 registros.'}</div>
-      <div class="table-responsive">
-        <table class="table table-sm table-striped">
-          <thead>
-            <tr>
-              <th>ID</th><th>Data</th><th>Obra</th><th>Serviço</th><th>Qtd</th><th>Horas</th><th>Usuário</th><th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows if rows else '<tr><td colspan="8" class="mini">Sem registros.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    {export_btn}
-    {admin_links}
-    """
-    return render_template_string(base_html, conteudo=conteudo)
-
-
-# =============================
-# PRODUTIVIDADE - PERMISSÃO
-# =============================
-def can_edit_record(record_user_id: int) -> bool:
-    if is_admin():
-        return True
-    return int(record_user_id or 0) == int(session.get("user_id", 0))
+    </div>"""
+    return render(c)
 
 
 def load_dropdowns():
-    conn = get_db()
-    cur = conn.cursor()
+    conn=get_db();cur=conn.cursor()
     cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras = [o[0] for o in cur.fetchall()]
-    cur.execute("SELECT nome, COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos = cur.fetchall()
+    obras=[o[0] for o in cur.fetchall()]
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
+    servicos=cur.fetchall()
     cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes = [f[0] for f in cur.fetchall()]
-    cur.execute("SELECT nome, COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos = cur.fetchall()
-    cur.close()
-    conn.close()
-    return obras, servicos, funcoes, insumos
+    funcoes=[f[0] for f in cur.fetchall()]
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
+    insumos=cur.fetchall()
+    cur.close();conn.close()
+    return obras,servicos,funcoes,insumos
 
 
-# =============================
-# PRODUTIVIDADE - EDITAR
-# =============================
-@app.route("/produtividade/editar/<int:rid>", methods=["GET", "POST"])
-def produtividade_editar(rid):
-    if not require_login():
-        return redirect("/")
+def can_edit(uid):
+    if is_admin(): return True
+    return int(uid or 0)==int(session.get("user_id",0))
 
-    conn = get_db()
-    cur = conn.cursor()
 
-    cur.execute("SELECT id, obra, servico, servico_unidade, quantidade, horas, funcoes, insumos, observacao, data, user_id FROM produtividade WHERE id=%s",
-                (rid,))
-    reg = cur.fetchone()
-    if not reg:
-        cur.close()
-        conn.close()
-        abort(404)
+def form_funcoes_insumos(funcoes, insumos):
+    fo="".join([f'<option value="{f}">{f}</option>' for f in funcoes])
+    io="".join([f'<option value="{n}" data-unidade="{u}">{n} ({u})</option>' for n,u in insumos])
+    return fo, io
 
-    (rid, obra, servico, serv_unid, qtd_serv, horas, funcoes_raw, insumos_raw, obs, data, user_id) = reg
 
-    if not can_edit_record(user_id):
-        cur.close()
-        conn.close()
-        abort(403)
-
-    obras, servicos, funcoes, insumos = load_dropdowns()
-
-    msg = ""
-    if request.method == "POST":
+@app.route("/dashboard", methods=["GET","POST"])
+def dashboard():
+    if not require_login(): return redirect("/")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("SELECT nome FROM obras ORDER BY nome")
+    obras=[o[0] for o in cur.fetchall()]
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
+    servicos=cur.fetchall()
+    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
+    funcoes=[f[0] for f in cur.fetchall()]
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
+    insumos=cur.fetchall()
+    msg=""
+    if request.method=="POST":
         require_csrf()
-
-        obra_n = request.form.get("obra", "").strip()
-        servico_n = request.form.get("servico", "").strip()
-        serv_unid_n = request.form.get("servico_unidade", "").strip()
-        obs_n = request.form.get("observacao", "").strip()
-
-        try:
-            qtd_n = float(request.form.get("quantidade", "0"))
-        except ValueError:
-            qtd_n = 0.0
-
-        try:
-            horas_n = float(request.form.get("horas", "0"))
-        except ValueError:
-            horas_n = 0.0
-
-        funcoes_nomes = request.form.getlist("funcoes_nome[]")
-        funcoes_qtds = request.form.getlist("funcoes_qtd[]")
-        funcoes_usadas = {}
-        for nome, qtd in zip(funcoes_nomes, funcoes_qtds):
-            nome = (nome or "").strip()
-            try:
-                q = int(qtd)
-            except ValueError:
-                q = 0
-            if nome and q > 0:
-                funcoes_usadas[nome] = funcoes_usadas.get(nome, 0) + q
-
-        insumos_nomes = request.form.getlist("insumos_nome[]")
-        insumos_qtds = request.form.getlist("insumos_qtd[]")
-        insumos_unids = request.form.getlist("insumos_unid[]")
-        insumos_usados = {}
-        for nome, qtd, unid in zip(insumos_nomes, insumos_qtds, insumos_unids):
-            nome = (nome or "").strip()
-            unid = (unid or "").strip() or "un"
-            try:
-                q = float(qtd)
-            except ValueError:
-                q = 0.0
-            if nome and q > 0:
-                if nome in insumos_usados:
-                    insumos_usados[nome]["quantidade"] = float(insumos_usados[nome]["quantidade"]) + q
-                    insumos_usados[nome]["unidade"] = unid
-                else:
-                    insumos_usados[nome] = {"quantidade": q, "unidade": unid}
-
-        if obra_n and servico_n and serv_unid_n and qtd_n > 0 and horas_n > 0:
-            cur.execute("""
-                UPDATE produtividade
-                SET obra=%s, servico=%s, servico_unidade=%s, quantidade=%s, horas=%s,
-                    funcoes=%s, insumos=%s, observacao=%s
-                WHERE id=%s
-            """, (
-                obra_n, servico_n, serv_unid_n, qtd_n, horas_n,
-                psycopg2.extras.Json(funcoes_usadas),
-                psycopg2.extras.Json(insumos_usados),
-                obs_n,
-                rid
-            ))
-            conn.commit()
-            msg = "✅ Registro atualizado!"
-            obra, servico, serv_unid, qtd_serv, horas, obs = obra_n, servico_n, serv_unid_n, qtd_n, horas_n, obs_n
-            funcoes_raw, insumos_raw = funcoes_usadas, insumos_usados
-        else:
-            msg = "⚠️ Preencha Obra/Serviço/Unidade e informe Quantidade e Horas (> 0)."
-
-    cur.close()
-    conn.close()
-
-    obras_opt = "".join([f'<option value="{o}" {"selected" if o==obra else ""}>{o}</option>' for o in obras])
-
-    servicos_opt = ""
-    for s, un in servicos:
-        sel = "selected" if s == servico else ""
-        servicos_opt += f'<option value="{s}" data-unidade="{un}" {sel}>{s} ({un})</option>'
-
-    funcoes_opt = "".join([f'<option value="{f}">{f}</option>' for f in funcoes])
-
-    insumos_opt = ""
-    for nome, unid in insumos:
-        insumos_opt += f'<option value="{nome}" data-unidade="{unid}">{nome} ({unid})</option>'
-
-    funcoes_data = safe_json_load(funcoes_raw) or {}
-    insumos_data = safe_json_load(insumos_raw) or {}
-
-    funcoes_badges = ""
-    if isinstance(funcoes_data, dict):
-        for n, q in funcoes_data.items():
-            try:
-                qi = int(q)
-            except Exception:
-                qi = 0
-            if n and qi > 0:
-                funcoes_badges += f"""
-                <div class="badge bg-light text-dark badge-item p-2">
-                  <strong>{n}</strong> - {qi}
-                  <button type="button" class="btn btn-sm btn-danger ms-2" onclick="this.parentElement.remove()">x</button>
-                  <input type="hidden" name="funcoes_nome[]" value="{n}">
-                  <input type="hidden" name="funcoes_qtd[]" value="{qi}">
-                </div>
-                """
-
-    insumos_badges = ""
-    if isinstance(insumos_data, dict):
-        for n, v in insumos_data.items():
-            if not n:
-                continue
-            if isinstance(v, dict):
-                qtd = v.get("quantidade", 0)
-                unid = v.get("unidade", "un")
-            else:
-                qtd = v
-                unid = "un"
-            try:
-                qf = float(qtd)
-            except Exception:
-                qf = 0.0
-            if qf > 0:
-                insumos_badges += f"""
-                <div class="badge bg-light text-dark badge-item p-2">
-                  <strong>{n}</strong> - {qf} {unid}
-                  <button type="button" class="btn btn-sm btn-danger ms-2" onclick="this.parentElement.remove()">x</button>
-                  <input type="hidden" name="insumos_nome[]" value="{n}">
-                  <input type="hidden" name="insumos_qtd[]" value="{qf}">
-                  <input type="hidden" name="insumos_unid[]" value="{unid}">
-                </div>
-                """
-
-    conteudo = f"""
-    <p><a href="/dashboard">← Voltar</a></p>
-    <div class="card p-4">
-      <h4>Editar registro #{rid}</h4>
-      <div class="mini mb-2">Data: {data or ""}</div>
-      <p class="text-success">{msg}</p>
-
+        obra=request.form.get("obra","").strip()
+        servico=request.form.get("servico","").strip()
+        su=request.form.get("servico_unidade","").strip()
+        obs=request.form.get("observacao","").strip()
+        try: qtd=float(request.form.get("quantidade","0"))
+        except: qtd=0.0
+        try: hrs=float(request.form.get("horas","0"))
+        except: hrs=0.0
+        fn=request.form.getlist("funcoes_nome[]");fq=request.form.getlist("funcoes_qtd[]")
+        fu={}
+        for n,q in zip(fn,fq):
+            n=(n or "").strip()
+            try: qi=int(q)
+            except: qi=0
+            if n and qi>0: fu[n]=fu.get(n,0)+qi
+        ins_n=request.form.getlist("insumos_nome[]");ins_q=request.form.getlist("insumos_qtd[]");ins_u=request.form.getlist("insumos_unid[]")
+        iu={}
+        for n,q,u in zip(ins_n,ins_q,ins_u):
+            n=(n or "").strip();u=(u or "").strip() or "un"
+            try: qf=float(q)
+            except: qf=0.0
+            if n and qf>0:
+                if n in iu: iu[n]["quantidade"]=float(iu[n]["quantidade"])+qf
+                else: iu[n]={"quantidade":qf,"unidade":u}
+        if obra and servico and su and qtd>0 and hrs>0:
+            cur.execute("INSERT INTO produtividade (obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (obra,servico,su,qtd,hrs,psycopg2.extras.Json(fu),psycopg2.extras.Json(iu),obs,datetime.now().strftime("%d/%m/%Y"),session["user_id"]))
+            conn.commit();msg="ok:Registro salvo!"
+        else: msg="err:Preencha Obra, Servico, Quantidade e Horas."
+    if is_admin():
+        cur.execute("SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 20")
+    else:
+        cur.execute("SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id WHERE p.user_id=%s ORDER BY p.id DESC LIMIT 20",(session["user_id"],))
+    recent=cur.fetchall();cur.close();conn.close()
+    oo="".join([f'<option value="{o}">{o}</option>' for o in obras])
+    so="".join([f'<option value="{s}" data-unidade="{u}">{s} ({u})</option>' for s,u in servicos])
+    fo,io=form_funcoes_insumos(funcoes,insumos)
+    rcs=""
+    for rid,d,ob,sv,qt,hr,un in recent:
+        df=f'<form method="POST" action="/produtividade/excluir/{rid}" style="display:inline;"><input type="hidden" name="_csrf" value="{csrf_token()}"><button class="btn-sm btn-del" onclick="return confirm(\'Excluir?\')">Excluir</button></form>'
+        ut=f'<span class="mini" style="margin-left:auto;">{un or ""}</span>' if is_admin() else ""
+        rcs+=f'<div class="rc"><div class="rc-top"><div class="rc-obra">{ob or ""}</div><div class="rc-date">{d or ""}</div></div><div class="rc-srv">{sv or ""}</div><div class="rc-nums"><div>Qtd: <strong>{qt or 0}</strong></div><div>Horas: <strong>{hr or 0}</strong></div></div><div class="rc-act"><a class="btn-sm btn-edit" href="/produtividade/editar/{rid}">Editar</a>{df}{ut}</div></div>'
+    adm=""
+    if is_admin():
+        adm=f'<div class="card"><div class="ctitle">Administracao</div><div class="agrid"><a href="/exportar" class="btn btn-dark" style="font-size:.82rem;padding:11px;">Exportar Excel</a><a href="/criar_usuario" class="btn btn-warn" style="font-size:.82rem;padding:11px;">Criar Usuario</a><a href="/cadastros" class="btn btn-info" style="font-size:.82rem;padding:11px;">Cadastros</a><a href="/usuarios" class="btn btn-purple" style="font-size:.82rem;padding:11px;">Usuarios</a></div></div>'
+    c=f"""{alert(msg)}
+    <div class="card">
+      <div class="ctitle">Novo Registro</div>
       <form method="POST">
         <input type="hidden" name="_csrf" value="{csrf_token()}">
-
-        <select class="form-control mb-2" name="obra" required>
-          <option value="">Selecione obra</option>
-          {obras_opt}
-        </select>
-
-        <select class="form-control mb-2" name="servico" id="servico_select" required onchange="setServicoUnidade()">
-          <option value="">Selecione serviço</option>
-          {servicos_opt}
-        </select>
-
-        <input class="form-control mb-2" name="servico_unidade" id="servico_unidade"
-               placeholder="Unidade do serviço" readonly required value="{serv_unid or ""}">
-
-        <input class="form-control mb-2" name="quantidade" type="number" step="0.01"
-               placeholder="Quantidade executada" required value="{qtd_serv or ""}">
-
-        <input class="form-control mb-3" name="horas" type="number" step="0.1"
-               placeholder="Horas trabalhadas" required value="{horas or ""}">
-
-        <div class="line">
-          <h5>Funções</h5>
-          <div class="row g-2">
-            <div class="col-md-6">
-              <select class="form-control" id="func_select">
-                <option value="">Selecione / digite...</option>
-                {funcoes_opt}
-              </select>
-            </div>
-            <div class="col-md-4">
-              <input class="form-control" type="number" id="func_qtd" min="1" step="1" placeholder="Qtd" value="1">
-            </div>
-            <div class="col-md-2">
-              <button type="button" class="btn btn-primary w-100" onclick="addFunc()">Adicionar</button>
-            </div>
-          </div>
-          <div class="mt-2 mini">Itens adicionados:</div>
-          <div id="func_list" class="mt-1">{funcoes_badges}</div>
+        <div class="fl"><label class="fl-label">Obra</label><select name="obra" required><option value="">Selecione a obra...</option>{oo}</select></div>
+        <div class="fl"><label class="fl-label">Servico</label><select id="servico_select" name="servico" required><option value="">Selecione o servico...</option>{so}</select></div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <div style="flex:1;"><label class="fl-label">Quantidade executada</label><input type="number" name="quantidade" step="0.01" placeholder="0,00" required></div>
+          <div style="width:76px;"><label class="fl-label">Unidade</label><div class="upill" id="sb" style="width:100%;">—</div><input type="hidden" name="servico_unidade" id="servico_unidade"></div>
         </div>
-
-        <div class="line">
-          <h5>Insumos</h5>
-          <div class="row g-2">
-            <div class="col-md-6">
-              <select class="form-control" id="ins_select">
-                <option value="">Selecione / digite...</option>
-                {insumos_opt}
-              </select>
-            </div>
-            <div class="col-md-3">
-              <input class="form-control" type="number" id="ins_qtd" min="0" step="0.01" placeholder="Qtd" value="1">
-            </div>
-            <div class="col-md-1">
-              <input class="form-control" type="text" id="ins_unid" placeholder="un" readonly>
-            </div>
-            <div class="col-md-2">
-              <button type="button" class="btn btn-primary w-100" onclick="addIns()">Adicionar</button>
-            </div>
-          </div>
-          <div class="mt-2 mini">Itens adicionados:</div>
-          <div id="ins_list" class="mt-1">{insumos_badges}</div>
-        </div>
-
-        <textarea class="form-control mb-2" name="observacao" placeholder="Observações">{obs or ""}</textarea>
-        <button class="btn btn-success w-100">Salvar alterações</button>
+        <div class="fl"><label class="fl-label">Horas trabalhadas</label><input type="number" name="horas" step="0.1" placeholder="0,0" required></div>
+        <div class="stitle">Funcoes</div>
+        <div class="add-row"><select id="func_select"><option value=""></option>{fo}</select><input class="qty-box" type="number" id="fq" min="1" step="1" value="1"><button type="button" class="btn-plus" onclick="addFunc()">+</button></div>
+        <div class="tags" id="fl"></div>
+        <div class="stitle">Insumos</div>
+        <div class="add-row"><select id="ins_select"><option value=""></option>{io}</select><input class="qty-box" type="number" id="iq" min="0" step="0.01" value="1"><div class="upill" id="ib">un</div><button type="button" class="btn-plus" onclick="addIns()">+</button></div>
+        <div class="tags" id="il"></div>
+        <div class="fl" style="margin-top:13px;"><label class="fl-label">Observacoes</label><textarea name="observacao" placeholder="Opcional..."></textarea></div>
+        <button class="btn btn-green">Salvar Registro</button>
       </form>
     </div>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
+    <div class="card">
+      <div class="ctitle">Registros Recentes</div>
+      <div class="mini" style="margin-bottom:9px;">{"Ultimos 20 (todos os usuarios)." if is_admin() else "Seus ultimos 20 registros."}</div>
+      {rcs if rcs else '<div class="mini" style="padding:10px 0;">Nenhum registro ainda.</div>'}
+    </div>
+    {adm}"""
+    return render(c)
 
 
-# =============================
-# PRODUTIVIDADE - EXCLUIR
-# =============================
+@app.route("/produtividade/editar/<int:rid>", methods=["GET","POST"])
+def produtividade_editar(rid):
+    if not require_login(): return redirect("/")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("SELECT id,obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id FROM produtividade WHERE id=%s",(rid,))
+    reg=cur.fetchone()
+    if not reg: cur.close();conn.close();abort(404)
+    (rid,obra,servico,su,qtd,hrs,fr,ir,obs,data,uid)=reg
+    if not can_edit(uid): cur.close();conn.close();abort(403)
+    obras,servicos,funcoes,insumos=load_dropdowns()
+    msg=""
+    if request.method=="POST":
+        require_csrf()
+        on=request.form.get("obra","").strip();sn=request.form.get("servico","").strip()
+        sun=request.form.get("servico_unidade","").strip();on2=request.form.get("observacao","").strip()
+        try: qn=float(request.form.get("quantidade","0"))
+        except: qn=0.0
+        try: hn=float(request.form.get("horas","0"))
+        except: hn=0.0
+        fn=request.form.getlist("funcoes_nome[]");fq=request.form.getlist("funcoes_qtd[]")
+        fu={}
+        for n,q in zip(fn,fq):
+            n=(n or "").strip()
+            try: qi=int(q)
+            except: qi=0
+            if n and qi>0: fu[n]=fu.get(n,0)+qi
+        ins_n=request.form.getlist("insumos_nome[]");ins_q=request.form.getlist("insumos_qtd[]");ins_u=request.form.getlist("insumos_unid[]")
+        iu={}
+        for n,q,u in zip(ins_n,ins_q,ins_u):
+            n=(n or "").strip();u=(u or "").strip() or "un"
+            try: qf=float(q)
+            except: qf=0.0
+            if n and qf>0:
+                if n in iu: iu[n]["quantidade"]=float(iu[n]["quantidade"])+qf
+                else: iu[n]={"quantidade":qf,"unidade":u}
+        if on and sn and sun and qn>0 and hn>0:
+            cur.execute("UPDATE produtividade SET obra=%s,servico=%s,servico_unidade=%s,quantidade=%s,horas=%s,funcoes=%s,insumos=%s,observacao=%s WHERE id=%s",
+                        (on,sn,sun,qn,hn,psycopg2.extras.Json(fu),psycopg2.extras.Json(iu),on2,rid))
+            conn.commit();msg="ok:Atualizado!";obra,servico,su,qtd,hrs,obs=on,sn,sun,qn,hn,on2;fr,ir=fu,iu
+        else: msg="err:Preencha todos os campos obrigatorios."
+    cur.close();conn.close()
+    oo="".join([f'<option value="{o}" {"selected" if o==obra else ""}>{o}</option>' for o in obras])
+    so="".join([f'<option value="{s}" data-unidade="{u}" {"selected" if s==servico else ""}>{s} ({u})</option>' for s,u in servicos])
+    fo,io=form_funcoes_insumos(funcoes,insumos)
+    fd=safe_json_load(fr) or {};id_=safe_json_load(ir) or {}
+    fb=""
+    if isinstance(fd,dict):
+        for n,q in fd.items():
+            try: qi=int(q)
+            except: qi=0
+            if n and qi>0: fb+=f'<div class="tag"><span>{n} — {qi}</span><button type="button" class="tag-x" onclick="this.closest(\'.tag\').remove()">x</button><input type="hidden" name="funcoes_nome[]" value="{n}"><input type="hidden" name="funcoes_qtd[]" value="{qi}"></div>'
+    ib=""
+    if isinstance(id_,dict):
+        for n,v in id_.items():
+            if not n: continue
+            if isinstance(v,dict): qf=v.get("quantidade",0);uu=v.get("unidade","un")
+            else: qf=v;uu="un"
+            try: qf=float(qf)
+            except: qf=0.0
+            if qf>0: ib+=f'<div class="tag"><span>{n} — {qf} {uu}</span><button type="button" class="tag-x" onclick="this.closest(\'.tag\').remove()">x</button><input type="hidden" name="insumos_nome[]" value="{n}"><input type="hidden" name="insumos_qtd[]" value="{qf}"><input type="hidden" name="insumos_unid[]" value="{uu}"></div>'
+    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+    {alert(msg)}
+    <div class="card">
+      <div class="ctitle">Editar #{rid}</div>
+      <div class="mini" style="margin-bottom:13px;">Data: {data or ""}</div>
+      <form method="POST">
+        <input type="hidden" name="_csrf" value="{csrf_token()}">
+        <div class="fl"><label class="fl-label">Obra</label><select name="obra" required><option value="">Selecione...</option>{oo}</select></div>
+        <div class="fl"><label class="fl-label">Servico</label><select id="servico_select" name="servico" required><option value="">Selecione...</option>{so}</select></div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <div style="flex:1;"><label class="fl-label">Quantidade executada</label><input type="number" name="quantidade" step="0.01" value="{qtd or ""}" required></div>
+          <div style="width:76px;"><label class="fl-label">Unidade</label><div class="upill" id="sb" style="width:100%;">{su or "—"}</div><input type="hidden" name="servico_unidade" id="servico_unidade" value="{su or ""}"></div>
+        </div>
+        <div class="fl"><label class="fl-label">Horas trabalhadas</label><input type="number" name="horas" step="0.1" value="{hrs or ""}" required></div>
+        <div class="stitle">Funcoes</div>
+        <div class="add-row"><select id="func_select"><option value=""></option>{fo}</select><input class="qty-box" type="number" id="fq" min="1" step="1" value="1"><button type="button" class="btn-plus" onclick="addFunc()">+</button></div>
+        <div class="tags" id="fl">{fb}</div>
+        <div class="stitle">Insumos</div>
+        <div class="add-row"><select id="ins_select"><option value=""></option>{io}</select><input class="qty-box" type="number" id="iq" min="0" step="0.01" value="1"><div class="upill" id="ib">un</div><button type="button" class="btn-plus" onclick="addIns()">+</button></div>
+        <div class="tags" id="il">{ib}</div>
+        <div class="fl" style="margin-top:13px;"><label class="fl-label">Observacoes</label><textarea name="observacao">{obs or ""}</textarea></div>
+        <button class="btn btn-gold">Salvar Alteracoes</button>
+      </form>
+    </div>"""
+    return render(c)
+
+
 @app.route("/produtividade/excluir/<int:rid>", methods=["POST"])
 def produtividade_excluir(rid):
-    if not require_login():
-        return redirect("/")
-
+    if not require_login(): return redirect("/")
     require_csrf()
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM produtividade WHERE id=%s", (rid,))
-    row = cur.fetchone()
-    if not row:
-        cur.close()
-        conn.close()
-        return redirect("/dashboard")
-
-    if not can_edit_record(row[0]):
-        cur.close()
-        conn.close()
-        abort(403)
-
-    cur.execute("DELETE FROM produtividade WHERE id=%s", (rid,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return redirect("/dashboard")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("SELECT user_id FROM produtividade WHERE id=%s",(rid,))
+    row=cur.fetchone()
+    if not row: cur.close();conn.close();return redirect("/dashboard")
+    if not can_edit(row[0]): cur.close();conn.close();abort(403)
+    cur.execute("DELETE FROM produtividade WHERE id=%s",(rid,))
+    conn.commit();cur.close();conn.close();return redirect("/dashboard")
 
 
-# =============================
-# ADMIN - CRIAR USUÁRIO
-# =============================
-@app.route("/criar_usuario", methods=["GET", "POST"])
+@app.route("/criar_usuario", methods=["GET","POST"])
 def criar_usuario():
-    if not require_login() or not is_admin():
-        return redirect("/")
-
-    msg = ""
-    if request.method == "POST":
+    if not require_login() or not is_admin(): return redirect("/")
+    msg=""
+    if request.method=="POST":
         require_csrf()
-
-        nome = request.form.get("nome", "").strip()
-        email = request.form.get("email", "").strip().lower()
-        senha = request.form.get("senha", "").strip()
-        tipo = request.form.get("tipo", "usuario")
-
-        ok, m = password_policy_ok(senha)
-        if not ok:
-            msg = f"⚠️ {m}"
+        nome=request.form.get("nome","").strip();email=request.form.get("email","").strip().lower()
+        senha=request.form.get("senha","").strip();tipo=request.form.get("tipo","usuario")
+        ok,m=password_policy_ok(senha)
+        if not ok: msg=f"err:{m}"
         else:
-            senha_hash = generate_password_hash(senha)
-            conn = get_db()
-            cur = conn.cursor()
+            conn=get_db();cur=conn.cursor()
             try:
-                cur.execute(
-                    "INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s)",
-                    (nome, email, senha_hash, tipo)
-                )
-                conn.commit()
-                msg = "✅ Usuário criado!"
-            except Exception:
-                conn.rollback()
-                msg = "⚠️ Email já cadastrado!"
-            cur.close()
-            conn.close()
-
-    conteudo = f"""
-    <p><a href="/dashboard">← Voltar</a></p>
-    <div class="card p-4">
-      <h4>Criar Usuário</h4>
+                cur.execute("INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s)",(nome,email,generate_password_hash(senha),tipo))
+                conn.commit();msg="ok:Usuario criado!"
+            except: conn.rollback();msg="err:E-mail ja cadastrado."
+            cur.close();conn.close()
+    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+    {alert(msg)}
+    <div class="card">
+      <div class="ctitle">Criar Usuario</div>
       <form method="POST">
         <input type="hidden" name="_csrf" value="{csrf_token()}">
-        <input class="form-control mb-2" name="nome" placeholder="Nome" required>
-        <input class="form-control mb-2" name="email" placeholder="Email" type="email" required>
-        <input class="form-control mb-2" name="senha" placeholder="Senha" type="password" required>
-        <div class="mini mb-2">Regras: mínimo 8 caracteres, pelo menos 1 letra e 1 número.</div>
-        <select class="form-control mb-2" name="tipo">
-          <option value="usuario">Usuário</option>
-          <option value="admin">Administrador</option>
-        </select>
-        <button class="btn btn-warning w-100">Criar</button>
+        <div class="fl"><label class="fl-label">Nome</label><input type="text" name="nome" placeholder="Nome completo" required></div>
+        <div class="fl"><label class="fl-label">E-mail</label><input type="email" name="email" placeholder="email@exemplo.com" required></div>
+        <div class="fl"><label class="fl-label">Senha</label><input type="password" name="senha" placeholder="Minimo 8 caracteres" required></div>
+        <div class="mini" style="margin-bottom:9px;">Minimo 8 caracteres, pelo menos 1 letra e 1 numero.</div>
+        <div class="fl"><label class="fl-label">Perfil</label><select name="tipo"><option value="usuario">Usuario</option><option value="admin">Administrador</option></select></div>
+        <button class="btn btn-gold">Criar</button>
       </form>
-      <p class="mt-3">{msg}</p>
-    </div>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
+    </div>"""
+    return render(c)
 
 
-# =============================
-# ADMIN - CADASTROS
-# =============================
-@app.route("/cadastros", methods=["GET", "POST"])
+@app.route("/cadastros", methods=["GET","POST"])
 def cadastros():
-    if not require_login() or not is_admin():
-        return redirect("/")
-
-    conn = get_db()
-    cur = conn.cursor()
-    msg = ""
-
-    if request.method == "POST":
+    if not require_login() or not is_admin(): return redirect("/")
+    conn=get_db();cur=conn.cursor();msg=""
+    if request.method=="POST":
         require_csrf()
-
-        if request.form.get("obra", "").strip():
-            try:
-                cur.execute("INSERT INTO obras (nome) VALUES (%s)", (request.form["obra"].strip(),))
-                conn.commit()
-                msg = "✅ Obra cadastrada!"
-            except Exception:
-                conn.rollback()
-                msg = "⚠️ Obra já existe."
-
-        if request.form.get("servico", "").strip() and request.form.get("unidade", "").strip():
-            try:
-                cur.execute("INSERT INTO servicos (nome,unidade) VALUES (%s,%s)",
-                            (request.form["servico"].strip(), request.form["unidade"].strip()))
-                conn.commit()
-                msg = "✅ Serviço cadastrado!"
-            except Exception:
-                conn.rollback()
-                msg = "⚠️ Serviço já existe."
-
-        if request.form.get("insumo", "").strip() and request.form.get("unidade_insumo", "").strip():
-            try:
-                cur.execute("INSERT INTO insumos (nome,unidade) VALUES (%s,%s)",
-                            (request.form["insumo"].strip(), request.form["unidade_insumo"].strip()))
-                conn.commit()
-                msg = "✅ Insumo cadastrado!"
-            except Exception:
-                conn.rollback()
-                msg = "⚠️ Insumo já existe."
-
-        if request.form.get("funcao", "").strip():
-            try:
-                cur.execute("INSERT INTO funcoes (nome) VALUES (%s)", (request.form["funcao"].strip(),))
-                conn.commit()
-                msg = "✅ Função cadastrada!"
-            except Exception:
-                conn.rollback()
-                msg = "⚠️ Função já existe."
-
-    cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras = [o[0] for o in cur.fetchall()]
-    cur.execute("SELECT nome, COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos = cur.fetchall()
-    cur.execute("SELECT nome, COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos = cur.fetchall()
-    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes = [f[0] for f in cur.fetchall()]
-
-    cur.close()
-    conn.close()
-
-    conteudo = f"""
-    <p><a href="/dashboard">← Voltar</a></p>
-
-    <div class="card p-4">
-      <h4>Obras</h4>
-      <form method="POST" class="mb-2">
-        <input type="hidden" name="_csrf" value="{csrf_token()}">
-        <input class="form-control mb-2" name="obra" placeholder="Nome da obra" required>
-        <button class="btn btn-info w-100">Adicionar</button>
-      </form>
-      <ul>{"".join([f"<li>{o}</li>" for o in obras])}</ul>
-    </div>
-
-    <div class="card p-4">
-      <h4>Serviços</h4>
-      <form method="POST" class="mb-2">
-        <input type="hidden" name="_csrf" value="{csrf_token()}">
-        <input class="form-control mb-2" name="servico" placeholder="Nome do serviço" required>
-        <input class="form-control mb-2" name="unidade" placeholder="Unidade (ex: m², m³, un, kg)" required>
-        <button class="btn btn-info w-100">Adicionar</button>
-      </form>
-      <ul>{"".join([f"<li>{s[0]} ({s[1]})</li>" for s in servicos])}</ul>
-    </div>
-
-    <div class="card p-4">
-      <h4>Insumos</h4>
-      <form method="POST" class="mb-2">
-        <input type="hidden" name="_csrf" value="{csrf_token()}">
-        <input class="form-control mb-2" name="insumo" placeholder="Nome do insumo" required>
-        <input class="form-control mb-2" name="unidade_insumo" placeholder="Unidade (ex: kg, m, un, saco)" required>
-        <button class="btn btn-info w-100">Adicionar</button>
-      </form>
-      <ul>{"".join([f"<li>{i[0]} ({i[1]})</li>" for i in insumos])}</ul>
-    </div>
-
-    <div class="card p-4">
-      <h4>Funções</h4>
-      <form method="POST" class="mb-2">
-        <input type="hidden" name="_csrf" value="{csrf_token()}">
-        <input class="form-control mb-2" name="funcao" placeholder="Nome da função (ex: Armador)" required>
-        <button class="btn btn-info w-100">Adicionar</button>
-      </form>
-      <ul>{"".join([f"<li>{f}</li>" for f in funcoes])}</ul>
-    </div>
-
-    <p class="text-success">{msg}</p>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
+        if request.form.get("obra","").strip():
+            try: cur.execute("INSERT INTO obras (nome) VALUES (%s)",(request.form["obra"].strip(),));conn.commit();msg="ok:Obra cadastrada!"
+            except: conn.rollback();msg="err:Obra ja existe."
+        if request.form.get("servico","").strip() and request.form.get("unidade","").strip():
+            try: cur.execute("INSERT INTO servicos (nome,unidade) VALUES (%s,%s)",(request.form["servico"].strip(),request.form["unidade"].strip()));conn.commit();msg="ok:Servico cadastrado!"
+            except: conn.rollback();msg="err:Servico ja existe."
+        if request.form.get("insumo","").strip() and request.form.get("unidade_insumo","").strip():
+            try: cur.execute("INSERT INTO insumos (nome,unidade) VALUES (%s,%s)",(request.form["insumo"].strip(),request.form["unidade_insumo"].strip()));conn.commit();msg="ok:Insumo cadastrado!"
+            except: conn.rollback();msg="err:Insumo ja existe."
+        if request.form.get("funcao","").strip():
+            try: cur.execute("INSERT INTO funcoes (nome) VALUES (%s)",(request.form["funcao"].strip(),));conn.commit();msg="ok:Funcao cadastrada!"
+            except: conn.rollback();msg="err:Funcao ja existe."
+    cur.execute("SELECT nome FROM obras ORDER BY nome");obras=[o[0] for o in cur.fetchall()]
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome");servicos=cur.fetchall()
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome");insumos=cur.fetchall()
+    cur.execute("SELECT nome FROM funcoes ORDER BY nome");funcoes=[f[0] for f in cur.fetchall()]
+    cur.close();conn.close()
+    def lst(items,lbl=False):
+        if not items: return '<div class="mini">Nenhum cadastrado.</div>'
+        return "<ul class='clist'>"+"".join([f"<li>{(i[0]+' ('+i[1]+')') if lbl else i}</li>" for i in items])+"</ul>"
+    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+    {alert(msg)}
+    <div class="card"><div class="ctitle">Obras</div>
+      <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
+        <div style="display:flex;gap:8px;"><input type="text" name="obra" placeholder="Nome da obra" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
+      {lst(obras)}</div>
+    <div class="card"><div class="ctitle">Servicos</div>
+      <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
+        <input type="text" name="servico" placeholder="Nome do servico" required>
+        <div style="display:flex;gap:8px;"><input type="text" name="unidade" placeholder="Unidade (m2, m3, un...)" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
+      {lst(servicos,lbl=True)}</div>
+    <div class="card"><div class="ctitle">Insumos</div>
+      <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
+        <input type="text" name="insumo" placeholder="Nome do insumo" required>
+        <div style="display:flex;gap:8px;"><input type="text" name="unidade_insumo" placeholder="Unidade (kg, m, saco...)" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
+      {lst(insumos,lbl=True)}</div>
+    <div class="card"><div class="ctitle">Funcoes</div>
+      <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
+        <div style="display:flex;gap:8px;"><input type="text" name="funcao" placeholder="Ex: Armador, Pedreiro" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
+      {lst(funcoes)}</div>"""
+    return render(c)
 
 
-# =============================
-# ADMIN - USUÁRIOS
-# =============================
-@app.route("/usuarios", methods=["GET"])
+@app.route("/usuarios")
 def usuarios():
-    if not require_login() or not is_admin():
-        return redirect("/")
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, nome, email, tipo FROM usuarios ORDER BY id")
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    rows = ""
-    for uid, nome, email, tipo in users:
-        disabled_del = "disabled" if uid == session["user_id"] else ""
-        reset_link = f"/usuarios/reset_senha/{uid}"
-        rows += f"""
-        <tr>
-          <td>{uid}</td>
-          <td>{nome}</td>
-          <td>{email}</td>
-          <td>{tipo}</td>
-          <td class="d-flex gap-2 flex-wrap">
-            <a class="btn btn-sm btn-outline-primary" href="{reset_link}">Resetar senha</a>
-
-            <form method="POST" action="/usuarios/excluir" style="display:inline;">
-              <input type="hidden" name="_csrf" value="{csrf_token()}">
-              <input type="hidden" name="id" value="{uid}">
-              <button class="btn btn-sm btn-outline-danger" {disabled_del}
-                      onclick="return confirm('Excluir este usuário?');">Excluir</button>
-            </form>
-          </td>
-        </tr>
-        """
-
-    conteudo = f"""
-    <p><a href="/dashboard">← Voltar</a></p>
-    <div class="card p-4">
-      <h4>Gerenciar Usuários</h4>
-      <p class="mini">Você pode resetar senha e excluir usuários (não pode excluir a si mesmo).</p>
-      <div class="table-responsive">
-        <table class="table table-striped">
-          <thead><tr><th>ID</th><th>Nome</th><th>Email</th><th>Tipo</th><th>Ações</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
-      </div>
-    </div>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
+    if not require_login() or not is_admin(): return redirect("/")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("SELECT id,nome,email,tipo FROM usuarios ORDER BY id")
+    users=cur.fetchall();cur.close();conn.close()
+    rows=""
+    for uid,nome,email,tipo in users:
+        dis="disabled" if uid==session["user_id"] else ""
+        rows+=f'<tr><td>{nome}</td><td style="font-size:.75rem;color:#6b7280;">{email}</td><td><span style="font-size:.7rem;font-weight:700;text-transform:uppercase;color:{"#C9933A" if tipo=="admin" else "#6b7280"};">{tipo}</span></td><td><div style="display:flex;gap:5px;flex-wrap:wrap;"><a class="btn-sm btn-edit" href="/usuarios/reset_senha/{uid}">Senha</a><form method="POST" action="/usuarios/excluir" style="display:inline;"><input type="hidden" name="_csrf" value="{csrf_token()}"><input type="hidden" name="id" value="{uid}"><button class="btn-sm btn-del" {dis} onclick="return confirm(\'Excluir?\')">Excluir</button></form></div></td></tr>'
+    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+    <div class="card"><div class="ctitle">Usuarios</div>
+      <div style="overflow-x:auto;"><table class="utable"><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Acoes</th></tr></thead><tbody>{rows}</tbody></table></div>
+    </div>"""
+    return render(c)
 
 
 @app.route("/usuarios/excluir", methods=["POST"])
 def usuarios_excluir():
-    if not require_login() or not is_admin():
-        return redirect("/")
-
+    if not require_login() or not is_admin(): return redirect("/")
     require_csrf()
-
-    try:
-        uid = int(request.form.get("id", "0"))
-    except ValueError:
-        uid = 0
-
-    if uid <= 0 or uid == session["user_id"]:
-        return redirect("/usuarios")
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM usuarios WHERE id = %s", (uid,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return redirect("/usuarios")
+    try: uid=int(request.form.get("id","0"))
+    except: uid=0
+    if uid<=0 or uid==session["user_id"]: return redirect("/usuarios")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("DELETE FROM usuarios WHERE id=%s",(uid,))
+    conn.commit();cur.close();conn.close();return redirect("/usuarios")
 
 
-# =============================
-# ADMIN - RESET SENHA
-# =============================
-@app.route("/usuarios/reset_senha/<int:uid>", methods=["GET", "POST"])
+@app.route("/usuarios/reset_senha/<int:uid>", methods=["GET","POST"])
 def usuarios_reset_senha(uid):
-    if not require_login() or not is_admin():
-        return redirect("/")
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, nome, email, tipo FROM usuarios WHERE id=%s", (uid,))
-    user = cur.fetchone()
-    if not user:
-        cur.close()
-        conn.close()
-        abort(404)
-
-    msg_ok = ""
-    msg_err = ""
-
-    if request.method == "POST":
+    if not require_login() or not is_admin(): return redirect("/")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("SELECT id,nome,email,tipo FROM usuarios WHERE id=%s",(uid,))
+    user=cur.fetchone()
+    if not user: cur.close();conn.close();abort(404)
+    msg=""
+    if request.method=="POST":
         require_csrf()
-
-        nova = request.form.get("nova_senha", "").strip()
-        nova2 = request.form.get("nova_senha2", "").strip()
-
-        if nova != nova2:
-            msg_err = "⚠️ As senhas não conferem."
+        n=request.form.get("nova_senha","").strip();n2=request.form.get("nova_senha2","").strip()
+        if n!=n2: msg="err:As senhas nao conferem."
         else:
-            ok, m = password_policy_ok(nova)
-            if not ok:
-                msg_err = f"⚠️ {m}"
+            ok,m=password_policy_ok(n)
+            if not ok: msg=f"err:{m}"
             else:
-                cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s",
-                            (generate_password_hash(nova), uid))
-                conn.commit()
-                msg_ok = "✅ Senha resetada com sucesso."
-
-    cur.close()
-    conn.close()
-
-    conteudo = f"""
-    <p><a href="/usuarios">← Voltar</a></p>
-    <div class="card p-4">
-      <h4>Resetar senha</h4>
-      <div class="mini mb-3">
-        Usuário: <strong>{user[1]}</strong> — {user[2]} ({user[3]})
-      </div>
-
+                cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s",(generate_password_hash(n),uid))
+                conn.commit();msg="ok:Senha resetada!"
+    cur.close();conn.close()
+    c=f"""<a href="/usuarios" class="back">← Voltar</a>
+    {alert(msg)}
+    <div class="card"><div class="ctitle">Resetar Senha</div>
+      <div class="mini" style="margin-bottom:14px;">Usuario: <strong>{user[1]}</strong> — {user[2]}</div>
       <form method="POST">
         <input type="hidden" name="_csrf" value="{csrf_token()}">
-
-        <label class="form-label">Nova senha</label>
-        <input class="form-control mb-2" type="password" name="nova_senha" required>
-
-        <label class="form-label">Confirmar nova senha</label>
-        <input class="form-control mb-3" type="password" name="nova_senha2" required>
-
-        <div class="mini mb-2">Regras: mínimo 8 caracteres, pelo menos 1 letra e 1 número.</div>
-        <button class="btn btn-primary w-100">Resetar</button>
+        <div class="fl"><label class="fl-label">Nova senha</label><input type="password" name="nova_senha" required></div>
+        <div class="fl"><label class="fl-label">Confirmar</label><input type="password" name="nova_senha2" required></div>
+        <div class="mini" style="margin-bottom:11px;">Minimo 8 caracteres, pelo menos 1 letra e 1 numero.</div>
+        <button class="btn btn-gold">Resetar</button>
       </form>
-
-      <p class="text-success mt-3">{msg_ok}</p>
-      <p class="text-danger">{msg_err}</p>
-    </div>
-    """
-    return render_template_string(base_html, conteudo=conteudo)
+    </div>"""
+    return render(c)
 
 
-# =============================
-# EXPORTAR (1 ABA, POWER BI)
-# =============================
 @app.route("/exportar")
 def exportar():
-    if not require_login() or not is_admin():
-        return redirect("/dashboard")
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-      SELECT p.id, p.obra, p.servico, p.servico_unidade, p.quantidade, p.horas,
-             p.funcoes, p.insumos, p.observacao, p.data, p.user_id,
-             u.nome
-      FROM produtividade p
-      LEFT JOIN usuarios u ON u.id = p.user_id
-      ORDER BY p.id DESC
-    """)
-    dados = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Dados"
-
-    ws.append([
-        "registro_id",
-        "data",
-        "obra",
-        "servico",
-        "servico_unidade",
-        "quantidade_servico",
-        "horas",
-        "horas_por_unidade_servico",
-        "observacao",
-        "user_id",
-        "usuario_nome",
-        "tipo_item",
-        "item_nome",
-        "item_qtd",
-        "item_unidade",
-        "homem_hora"
-    ])
-
+    if not require_login() or not is_admin(): return redirect("/dashboard")
+    conn=get_db();cur=conn.cursor()
+    cur.execute("SELECT p.id,p.obra,p.servico,p.servico_unidade,p.quantidade,p.horas,p.funcoes,p.insumos,p.observacao,p.data,p.user_id,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC")
+    dados=cur.fetchall();cur.close();conn.close()
+    wb=Workbook();ws=wb.active;ws.title="Dados"
+    ws.append(["registro_id","data","obra","servico","servico_unidade","quantidade_servico","horas","horas_por_unidade_servico","observacao","user_id","usuario_nome","tipo_item","item_nome","item_qtd","item_unidade","homem_hora"])
     for row in dados:
-        (rid, obra, servico, serv_unid, qtd_serv, horas,
-         funcoes_raw, insumos_raw, obs, data, user_id, user_nome) = row
-
-        try:
-            horas_por_unid = (float(horas) / float(qtd_serv)) if float(qtd_serv) != 0 else 0
-        except Exception:
-            horas_por_unid = 0
-
-        funcoes = safe_json_load(funcoes_raw) or {}
-        insumos_data = safe_json_load(insumos_raw) or {}
-
-        wrote_any = False
-
-        if isinstance(funcoes, dict) and len(funcoes) > 0:
-            for funcao, qtd in funcoes.items():
-                try:
-                    qtd_int = int(qtd)
-                except Exception:
-                    qtd_int = 0
-                if not funcao or qtd_int <= 0:
-                    continue
-                try:
-                    hh = float(horas) * float(qtd_int)
-                except Exception:
-                    hh = 0
-
-                ws.append([
-                    rid, data, obra, servico, serv_unid, qtd_serv, horas, horas_por_unid, obs,
-                    user_id, user_nome or "",
-                    "FUNCAO",
-                    str(funcao),
-                    qtd_int,
-                    "",
-                    hh
-                ])
-                wrote_any = True
-
-        if isinstance(insumos_data, dict) and len(insumos_data) > 0:
-            for insumo_nome, val in insumos_data.items():
-                if not insumo_nome:
-                    continue
-
-                if isinstance(val, dict):
-                    qtd = val.get("quantidade", "")
-                    unid = val.get("unidade", "")
+        (rid,obra,servico,su,qtd,hrs,fr,ir,obs,data,uid,unom)=row
+        try: hpu=(float(hrs)/float(qtd)) if float(qtd)!=0 else 0
+        except: hpu=0
+        fu=safe_json_load(fr) or {};iu=safe_json_load(ir) or {}
+        wrote=False
+        if isinstance(fu,dict):
+            for fn,fq in fu.items():
+                try: qi=int(fq)
+                except: qi=0
+                if not fn or qi<=0: continue
+                try: hh=float(hrs)*float(qi)
+                except: hh=0
+                ws.append([rid,data,obra,servico,su,qtd,hrs,hpu,obs,uid,unom or "","FUNCAO",str(fn),qi,"",hh]);wrote=True
+        if isinstance(iu,dict):
+            for inn,iv in iu.items():
+                if not inn: continue
+                if isinstance(iv,dict): iq=iv.get("quantidade","");iu2=iv.get("unidade","")
                 else:
-                    s = str(val).strip()
-                    parts = s.split()
-                    qtd = parts[0] if parts else ""
-                    unid = " ".join(parts[1:]) if len(parts) > 1 else ""
-
-                try:
-                    qtd_num = float(qtd)
-                except Exception:
-                    qtd_num = 0.0
-                if qtd_num <= 0:
-                    continue
-
-                ws.append([
-                    rid, data, obra, servico, serv_unid, qtd_serv, horas, horas_por_unid, obs,
-                    user_id, user_nome or "",
-                    "INSUMO",
-                    str(insumo_nome),
-                    qtd_num,
-                    str(unid),
-                    ""
-                ])
-                wrote_any = True
-
-        if not wrote_any:
-            ws.append([
-                rid, data, obra, servico, serv_unid, qtd_serv, horas, horas_por_unid, obs,
-                user_id, user_nome or "",
-                "REGISTRO",
-                "",
-                "",
-                "",
-                ""
-            ])
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return send_file(output, download_name="produtividade_powerbi.xlsx", as_attachment=True)
+                    parts=str(iv).strip().split();iq=parts[0] if parts else "";iu2=" ".join(parts[1:]) if len(parts)>1 else ""
+                try: qn=float(iq)
+                except: qn=0.0
+                if qn<=0: continue
+                ws.append([rid,data,obra,servico,su,qtd,hrs,hpu,obs,uid,unom or "","INSUMO",str(inn),qn,str(iu2),""]);wrote=True
+        if not wrote: ws.append([rid,data,obra,servico,su,qtd,hrs,hpu,obs,uid,unom or "","REGISTRO","","","",""])
+    out=BytesIO();wb.save(out);out.seek(0)
+    return send_file(out,download_name="produtividade_powerbi.xlsx",as_attachment=True)
 
 
-# =============================
-# RUN
-# =============================
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
+if __name__=="__main__":
+    port=int(os.environ.get("PORT","5000"))
+    app.run(host="0.0.0.0",port=port,debug=False)
 
