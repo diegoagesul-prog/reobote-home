@@ -232,6 +232,12 @@ textarea{resize:vertical;min-height:74px;}
 .utable th{padding:7px 9px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:2px solid var(--border);}
 .utable td{padding:9px;border-bottom:1px solid var(--border);vertical-align:middle;}
 .utable tr:last-child td{border-bottom:none;}
+.acc{margin-top:10px;}
+.acc-btn{width:100%;display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#fafaf8;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:.84rem;font-weight:600;color:var(--text);font-family:'Inter',sans-serif;}
+.acc-btn:hover{background:#fdf5e8;border-color:#f0d5a0;}
+.acc-arr{font-size:.7rem;color:var(--muted);transition:transform .2s;}
+.acc-arr.open{transform:rotate(180deg);}
+.acc-body{padding-top:4px;}
 </style>
 </head>
 <body>
@@ -258,6 +264,14 @@ textarea{resize:vertical;min-height:74px;}
   {{ conteudo|safe }}
 </div>
 <script>
+function togAcc(id){
+  const el=document.getElementById(id);
+  if(!el)return;
+  const body=el.querySelector('.acc-body');
+  const arr=el.querySelector('.acc-arr');
+  if(body.style.display==='none'){body.style.display='block';arr.classList.add('open');}
+  else{body.style.display='none';arr.classList.remove('open');}
+}
 let tsS=null,tsF=null,tsI=null;
 function setSrvUnid(){
   const s=document.getElementById("servico_select"),u=document.getElementById("servico_unidade"),b=document.getElementById("sb");
@@ -662,29 +676,31 @@ def cadastros():
     cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome");insumos=cur.fetchall()
     cur.execute("SELECT nome FROM funcoes ORDER BY nome");funcoes=[f[0] for f in cur.fetchall()]
     cur.close();conn.close()
-    def lst(items,lbl=False):
-        if not items: return '<div class="mini">Nenhum cadastrado.</div>'
-        return "<ul class='clist'>"+"".join([f"<li>{(i[0]+' ('+i[1]+')') if lbl else i}</li>" for i in items])+"</ul>"
+    def lst(items, lbl=False, sid=""):
+        count = len(items)
+        if not items: return '<div class="mini" style="margin-top:8px;">Nenhum cadastrado.</div>'
+        ih = "<ul class='clist'>"+"".join([f"<li>{(i[0]+' ('+i[1]+')') if lbl else i}</li>" for i in items])+"</ul>"
+        return f'<div class="acc" id="acc-{sid}"><button type="button" class="acc-btn" onclick="togAcc(\'acc-{sid}\')"><span>{count} cadastrado{"s" if count!=1 else ""}</span><span class="acc-arr">▼</span></button><div class="acc-body" style="display:none;">{ih}</div></div>'
     c=f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card"><div class="ctitle">Obras</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <div style="display:flex;gap:8px;"><input type="text" name="obra" placeholder="Nome da obra" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(obras)}</div>
+      {lst(obras, sid="obras")}</div>
     <div class="card"><div class="ctitle">Servicos</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <input type="text" name="servico" placeholder="Nome do servico" required>
         <div style="display:flex;gap:8px;"><input type="text" name="unidade" placeholder="Unidade (m2, m3, un...)" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(servicos,lbl=True)}</div>
+      {lst(servicos, lbl=True, sid="servicos")}</div>
     <div class="card"><div class="ctitle">Insumos</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <input type="text" name="insumo" placeholder="Nome do insumo" required>
         <div style="display:flex;gap:8px;"><input type="text" name="unidade_insumo" placeholder="Unidade (kg, m, saco...)" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(insumos,lbl=True)}</div>
+      {lst(insumos, lbl=True, sid="insumos")}</div>
     <div class="card"><div class="ctitle">Funcoes</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <div style="display:flex;gap:8px;"><input type="text" name="funcao" placeholder="Ex: Armador, Pedreiro" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(funcoes)}</div>"""
+      {lst(funcoes, sid="funcoes")}</div>"""
     return render(c)
 
 
