@@ -8,20 +8,44 @@ import json
 import secrets
 import psycopg2
 import psycopg2.extras
+from psycopg2.pool import SimpleConnectionPool
 from urllib.parse import quote_plus
 
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "reobote_home_secret")
 
+DB_POOL = None  # pool global
+
+
+def _normalize_db_url(db_url: str) -> str:
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    return db_url
+
 
 def get_db():
+    """Pega uma conexão do pool (reutiliza conexões)."""
+    global DB_POOL
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL nao configurada.")
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-    return psycopg2.connect(db_url)
+
+    db_url = _normalize_db_url(db_url)
+
+    # cria o pool uma vez só
+    if DB_POOL is None:
+        # 1 a 10 conexões é ótimo pro seu cenário
+        DB_POOL = SimpleConnectionPool(1, 10, db_url)
+
+    return DB_POOL.getconn()
+
+
+def put_db(conn):
+    """Devolve a conexão pro pool."""
+    global DB_POOL
+    if DB_POOL and conn:
+        DB_POOL.putconn(conn)
 
 
 def safe_json_load(x):
@@ -82,38 +106,39 @@ def fmt_num(x, dec=2):
 def init_db():
     conn = get_db()
     cur = conn.cursor()
+    try:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, email TEXT UNIQUE, senha TEXT, tipo TEXT);"
+        )
+        cur.execute("CREATE TABLE IF NOT EXISTS obras (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
+        cur.execute("CREATE TABLE IF NOT EXISTS servicos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
+        cur.execute("CREATE TABLE IF NOT EXISTS insumos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
+        cur.execute("CREATE TABLE IF NOT EXISTS funcoes (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
 
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, email TEXT UNIQUE, senha TEXT, tipo TEXT);"
-    )
-    cur.execute("CREATE TABLE IF NOT EXISTS obras (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
-    cur.execute("CREATE TABLE IF NOT EXISTS servicos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
-    cur.execute("CREATE TABLE IF NOT EXISTS insumos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
-    cur.execute("CREATE TABLE IF NOT EXISTS funcoes (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS produtividade ("
+            "id SERIAL PRIMARY KEY, "
+            "obra TEXT, servico TEXT, servico_unidade TEXT, "
+            "quantidade DOUBLE PRECISION, horas DOUBLE PRECISION, "
+            "funcoes JSONB, insumos JSONB, observacao TEXT, data TEXT, user_id INTEGER"
+            ");"
+        )
 
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS produtividade ("
-        "id SERIAL PRIMARY KEY, "
-        "obra TEXT, servico TEXT, servico_unidade TEXT, "
-        "quantidade DOUBLE PRECISION, horas DOUBLE PRECISION, "
-        "funcoes JSONB, insumos JSONB, observacao TEXT, data TEXT, user_id INTEGER"
-        ");"
-    )
+        ae = os.environ.get("ADMIN_EMAIL")
+        ap = os.environ.get("ADMIN_PASSWORD")
+        if ae and ap:
+            ok, _ = password_policy_ok(ap)
+            if ok:
+                cur.execute(
+                    "INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s) "
+                    "ON CONFLICT (email) DO NOTHING;",
+                    ("Administrador", ae.strip().lower(), generate_password_hash(ap), "admin"),
+                )
 
-    ae = os.environ.get("ADMIN_EMAIL")
-    ap = os.environ.get("ADMIN_PASSWORD")
-    if ae and ap:
-        ok, _ = password_policy_ok(ap)
-        if ok:
-            cur.execute(
-                "INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s) "
-                "ON CONFLICT (email) DO NOTHING;",
-                ("Administrador", ae.strip().lower(), generate_password_hash(ap), "admin"),
-            )
-
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+    finally:
+        cur.close()
+        put_db(conn)
 
 
 init_db()
@@ -126,7 +151,6 @@ def ping():
 
 @app.route("/sw.js")
 def service_worker():
-    # importante: o JS abaixo registra '/sw.js' (não /static/sw.js)
     return app.send_static_file("sw.js"), 200, {
         "Content-Type": "application/javascript",
         "Service-Worker-Allowed": "/",
@@ -395,10 +419,13 @@ def login():
         senha = request.form.get("senha", "").strip()
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("SELECT id,nome,email,senha,tipo FROM usuarios WHERE email=%s", (email,))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
+        try:
+            cur.execute("SELECT id,nome,email,senha,tipo FROM usuarios WHERE email=%s", (email,))
+            user = cur.fetchone()
+        finally:
+            cur.close()
+            put_db(conn)
+
         if user and check_password_hash(user[3], senha):
             session["user_id"] = user[0]
             session["nome"] = user[1] or ""
@@ -406,6 +433,7 @@ def login():
             csrf_token()
             return redirect("/dashboard")
         msg = "E-mail ou senha incorretos."
+
     c = f"""<img src="/static/logo.png" class="login-logo" alt="Reobote">
     <div class="login-sub">Produtividade &amp; Consumo</div>
     <div class="login-card">
@@ -446,21 +474,22 @@ def minha_senha():
             else:
                 conn = get_db()
                 cur = conn.cursor()
-                cur.execute("SELECT senha FROM usuarios WHERE id=%s", (session["user_id"],))
-                row = cur.fetchone()
-                if not row or not check_password_hash(row[0], sa):
-                    msg = "err:Senha atual incorreta."
+                try:
+                    cur.execute("SELECT senha FROM usuarios WHERE id=%s", (session["user_id"],))
+                    row = cur.fetchone()
+                    if not row or not check_password_hash(row[0], sa):
+                        msg = "err:Senha atual incorreta."
+                    else:
+                        cur.execute(
+                            "UPDATE usuarios SET senha=%s WHERE id=%s",
+                            (generate_password_hash(n), session["user_id"]),
+                        )
+                        conn.commit()
+                        msg = "ok:Senha alterada!"
+                finally:
                     cur.close()
-                    conn.close()
-                else:
-                    cur.execute(
-                        "UPDATE usuarios SET senha=%s WHERE id=%s",
-                        (generate_password_hash(n), session["user_id"]),
-                    )
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    msg = "ok:Senha alterada!"
+                    put_db(conn)
+
     c = f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card">
@@ -480,17 +509,19 @@ def minha_senha():
 def load_dropdowns():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras = [o[0] for o in cur.fetchall()]
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos = cur.fetchall()
-    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes = [f[0] for f in cur.fetchall()]
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos = cur.fetchall()
-    cur.close()
-    conn.close()
-    return obras, servicos, funcoes, insumos
+    try:
+        cur.execute("SELECT nome FROM obras ORDER BY nome")
+        obras = [o[0] for o in cur.fetchall()]
+        cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
+        servicos = cur.fetchall()
+        cur.execute("SELECT nome FROM funcoes ORDER BY nome")
+        funcoes = [f[0] for f in cur.fetchall()]
+        cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
+        insumos = cur.fetchall()
+        return obras, servicos, funcoes, insumos
+    finally:
+        cur.close()
+        put_db(conn)
 
 
 def can_edit(uid):
@@ -513,104 +544,105 @@ def dashboard():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras = [o[0] for o in cur.fetchall()]
+    try:
+        cur.execute("SELECT nome FROM obras ORDER BY nome")
+        obras = [o[0] for o in cur.fetchall()]
 
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos = cur.fetchall()
+        cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
+        servicos = cur.fetchall()
 
-    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes = [f[0] for f in cur.fetchall()]
+        cur.execute("SELECT nome FROM funcoes ORDER BY nome")
+        funcoes = [f[0] for f in cur.fetchall()]
 
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos = cur.fetchall()
+        cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
+        insumos = cur.fetchall()
 
-    msg = ""
-    if request.method == "POST":
-        require_csrf()
-        obra = request.form.get("obra", "").strip()
-        servico = request.form.get("servico", "").strip()
-        su = request.form.get("servico_unidade", "").strip()
-        obs = request.form.get("observacao", "").strip()
+        msg = ""
+        if request.method == "POST":
+            require_csrf()
+            obra = request.form.get("obra", "").strip()
+            servico = request.form.get("servico", "").strip()
+            su = request.form.get("servico_unidade", "").strip()
+            obs = request.form.get("observacao", "").strip()
 
-        try:
-            qtd = float(request.form.get("quantidade", "0"))
-        except:
-            qtd = 0.0
-
-        try:
-            hrs = float(request.form.get("horas", "0"))
-        except:
-            hrs = 0.0
-
-        fn = request.form.getlist("funcoes_nome[]")
-        fq = request.form.getlist("funcoes_qtd[]")
-        fu = {}
-        for n, q in zip(fn, fq):
-            n = (n or "").strip()
             try:
-                qi = int(q)
+                qtd = float(request.form.get("quantidade", "0"))
             except:
-                qi = 0
-            if n and qi > 0:
-                fu[n] = fu.get(n, 0) + qi
+                qtd = 0.0
 
-        ins_n = request.form.getlist("insumos_nome[]")
-        ins_q = request.form.getlist("insumos_qtd[]")
-        ins_u = request.form.getlist("insumos_unid[]")
-        iu = {}
-        for n, q, u in zip(ins_n, ins_q, ins_u):
-            n = (n or "").strip()
-            u = (u or "").strip() or "un"
             try:
-                qf = float(q)
+                hrs = float(request.form.get("horas", "0"))
             except:
-                qf = 0.0
-            if n and qf > 0:
-                if n in iu:
-                    iu[n]["quantidade"] = float(iu[n]["quantidade"]) + qf
-                else:
-                    iu[n] = {"quantidade": qf, "unidade": u}
+                hrs = 0.0
 
-        if obra and servico and su and qtd > 0 and hrs > 0:
+            fn = request.form.getlist("funcoes_nome[]")
+            fq = request.form.getlist("funcoes_qtd[]")
+            fu = {}
+            for n, q in zip(fn, fq):
+                n = (n or "").strip()
+                try:
+                    qi = int(q)
+                except:
+                    qi = 0
+                if n and qi > 0:
+                    fu[n] = fu.get(n, 0) + qi
+
+            ins_n = request.form.getlist("insumos_nome[]")
+            ins_q = request.form.getlist("insumos_qtd[]")
+            ins_u = request.form.getlist("insumos_unid[]")
+            iu = {}
+            for n, q, u in zip(ins_n, ins_q, ins_u):
+                n = (n or "").strip()
+                u = (u or "").strip() or "un"
+                try:
+                    qf = float(q)
+                except:
+                    qf = 0.0
+                if n and qf > 0:
+                    if n in iu:
+                        iu[n]["quantidade"] = float(iu[n]["quantidade"]) + qf
+                    else:
+                        iu[n] = {"quantidade": qf, "unidade": u}
+
+            if obra and servico and su and qtd > 0 and hrs > 0:
+                cur.execute(
+                    "INSERT INTO produtividade (obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        obra,
+                        servico,
+                        su,
+                        qtd,
+                        hrs,
+                        psycopg2.extras.Json(fu),
+                        psycopg2.extras.Json(iu),
+                        obs,
+                        datetime.now().strftime("%d/%m/%Y"),
+                        session["user_id"],
+                    ),
+                )
+                conn.commit()
+                msg = "ok:Registro salvo!"
+            else:
+                msg = "err:Preencha Obra, Servico, Quantidade e Horas."
+
+        if is_admin():
             cur.execute(
-                "INSERT INTO produtividade (obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (
-                    obra,
-                    servico,
-                    su,
-                    qtd,
-                    hrs,
-                    psycopg2.extras.Json(fu),
-                    psycopg2.extras.Json(iu),
-                    obs,
-                    datetime.now().strftime("%d/%m/%Y"),
-                    session["user_id"],
-                ),
+                "SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome "
+                "FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id "
+                "ORDER BY p.id DESC LIMIT 20"
             )
-            conn.commit()
-            msg = "ok:Registro salvo!"
         else:
-            msg = "err:Preencha Obra, Servico, Quantidade e Horas."
-
-    if is_admin():
-        cur.execute(
-            "SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome "
-            "FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id "
-            "ORDER BY p.id DESC LIMIT 20"
-        )
-    else:
-        cur.execute(
-            "SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome "
-            "FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id "
-            "WHERE p.user_id=%s ORDER BY p.id DESC LIMIT 20",
-            (session["user_id"],),
-        )
-    recent = cur.fetchall()
-
-    cur.close()
-    conn.close()
+            cur.execute(
+                "SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome "
+                "FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id "
+                "WHERE p.user_id=%s ORDER BY p.id DESC LIMIT 20",
+                (session["user_id"],),
+            )
+        recent = cur.fetchall()
+    finally:
+        cur.close()
+        put_db(conn)
 
     oo = "".join([f'<option value="{o}">{o}</option>' for o in obras])
     so = "".join([f'<option value="{s}" data-unidade="{u}">{s} ({u})</option>' for s, u in servicos])
@@ -702,85 +734,82 @@ def produtividade_editar(rid):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id,obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id "
-        "FROM produtividade WHERE id=%s",
-        (rid,),
-    )
-    reg = cur.fetchone()
-    if not reg:
-        cur.close()
-        conn.close()
-        abort(404)
+    try:
+        cur.execute(
+            "SELECT id,obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id "
+            "FROM produtividade WHERE id=%s",
+            (rid,),
+        )
+        reg = cur.fetchone()
+        if not reg:
+            abort(404)
 
-    (rid, obra, servico, su, qtd, hrs, fr, ir, obs, data, uid) = reg
-    if not can_edit(uid):
-        cur.close()
-        conn.close()
-        abort(403)
+        (rid, obra, servico, su, qtd, hrs, fr, ir, obs, data, uid) = reg
+        if not can_edit(uid):
+            abort(403)
 
-    obras, servicos, funcoes, insumos = load_dropdowns()
-    msg = ""
-    if request.method == "POST":
-        require_csrf()
-        on = request.form.get("obra", "").strip()
-        sn = request.form.get("servico", "").strip()
-        sun = request.form.get("servico_unidade", "").strip()
-        on2 = request.form.get("observacao", "").strip()
+        obras, servicos, funcoes, insumos = load_dropdowns()
+        msg = ""
+        if request.method == "POST":
+            require_csrf()
+            on = request.form.get("obra", "").strip()
+            sn = request.form.get("servico", "").strip()
+            sun = request.form.get("servico_unidade", "").strip()
+            on2 = request.form.get("observacao", "").strip()
 
-        try:
-            qn = float(request.form.get("quantidade", "0"))
-        except:
-            qn = 0.0
-        try:
-            hn = float(request.form.get("horas", "0"))
-        except:
-            hn = 0.0
-
-        fn = request.form.getlist("funcoes_nome[]")
-        fq = request.form.getlist("funcoes_qtd[]")
-        fu = {}
-        for n, q in zip(fn, fq):
-            n = (n or "").strip()
             try:
-                qi = int(q)
+                qn = float(request.form.get("quantidade", "0"))
             except:
-                qi = 0
-            if n and qi > 0:
-                fu[n] = fu.get(n, 0) + qi
-
-        ins_n = request.form.getlist("insumos_nome[]")
-        ins_q = request.form.getlist("insumos_qtd[]")
-        ins_u = request.form.getlist("insumos_unid[]")
-        iu = {}
-        for n, q, u in zip(ins_n, ins_q, ins_u):
-            n = (n or "").strip()
-            u = (u or "").strip() or "un"
+                qn = 0.0
             try:
-                qf = float(q)
+                hn = float(request.form.get("horas", "0"))
             except:
-                qf = 0.0
-            if n and qf > 0:
-                if n in iu:
-                    iu[n]["quantidade"] = float(iu[n]["quantidade"]) + qf
-                else:
-                    iu[n] = {"quantidade": qf, "unidade": u}
+                hn = 0.0
 
-        if on and sn and sun and qn > 0 and hn > 0:
-            cur.execute(
-                "UPDATE produtividade SET obra=%s,servico=%s,servico_unidade=%s,quantidade=%s,horas=%s,funcoes=%s,insumos=%s,observacao=%s "
-                "WHERE id=%s",
-                (on, sn, sun, qn, hn, psycopg2.extras.Json(fu), psycopg2.extras.Json(iu), on2, rid),
-            )
-            conn.commit()
-            msg = "ok:Atualizado!"
-            obra, servico, su, qtd, hrs, obs = on, sn, sun, qn, hn, on2
-            fr, ir = fu, iu
-        else:
-            msg = "err:Preencha todos os campos obrigatorios."
+            fn = request.form.getlist("funcoes_nome[]")
+            fq = request.form.getlist("funcoes_qtd[]")
+            fu = {}
+            for n, q in zip(fn, fq):
+                n = (n or "").strip()
+                try:
+                    qi = int(q)
+                except:
+                    qi = 0
+                if n and qi > 0:
+                    fu[n] = fu.get(n, 0) + qi
 
-    cur.close()
-    conn.close()
+            ins_n = request.form.getlist("insumos_nome[]")
+            ins_q = request.form.getlist("insumos_qtd[]")
+            ins_u = request.form.getlist("insumos_unid[]")
+            iu = {}
+            for n, q, u in zip(ins_n, ins_q, ins_u):
+                n = (n or "").strip()
+                u = (u or "").strip() or "un"
+                try:
+                    qf = float(q)
+                except:
+                    qf = 0.0
+                if n and qf > 0:
+                    if n in iu:
+                        iu[n]["quantidade"] = float(iu[n]["quantidade"]) + qf
+                    else:
+                        iu[n] = {"quantidade": qf, "unidade": u}
+
+            if on and sn and sun and qn > 0 and hn > 0:
+                cur.execute(
+                    "UPDATE produtividade SET obra=%s,servico=%s,servico_unidade=%s,quantidade=%s,horas=%s,funcoes=%s,insumos=%s,observacao=%s "
+                    "WHERE id=%s",
+                    (on, sn, sun, qn, hn, psycopg2.extras.Json(fu), psycopg2.extras.Json(iu), on2, rid),
+                )
+                conn.commit()
+                msg = "ok:Atualizado!"
+                obra, servico, su, qtd, hrs, obs = on, sn, sun, qn, hn, on2
+                fr, ir = fu, iu
+            else:
+                msg = "err:Preencha todos os campos obrigatorios."
+    finally:
+        cur.close()
+        put_db(conn)
 
     oo = "".join([f'<option value="{o}" {"selected" if o==obra else ""}>{o}</option>' for o in obras])
     so = "".join([f'<option value="{s}" data-unidade="{u}" {"selected" if s==servico else ""}>{s} ({u})</option>' for s, u in servicos])
@@ -867,23 +896,23 @@ def produtividade_excluir(rid):
     if not require_login():
         return redirect("/")
     require_csrf()
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT user_id FROM produtividade WHERE id=%s", (rid,))
-    row = cur.fetchone()
-    if not row:
-        cur.close()
-        conn.close()
+    try:
+        cur.execute("SELECT user_id FROM produtividade WHERE id=%s", (rid,))
+        row = cur.fetchone()
+        if not row:
+            return redirect("/dashboard")
+        if not can_edit(row[0]):
+            abort(403)
+
+        cur.execute("DELETE FROM produtividade WHERE id=%s", (rid,))
+        conn.commit()
         return redirect("/dashboard")
-    if not can_edit(row[0]):
+    finally:
         cur.close()
-        conn.close()
-        abort(403)
-    cur.execute("DELETE FROM produtividade WHERE id=%s", (rid,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return redirect("/dashboard")
+        put_db(conn)
 
 
 @app.route("/criar_usuario", methods=["GET", "POST"])
@@ -913,8 +942,10 @@ def criar_usuario():
             except:
                 conn.rollback()
                 msg = "err:E-mail ja cadastrado."
-            cur.close()
-            conn.close()
+            finally:
+                cur.close()
+                put_db(conn)
+
     c = f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card">
@@ -954,8 +985,10 @@ def cadastros_excluir():
     except:
         conn.rollback()
         msg = "err:Nao foi possivel excluir."
-    cur.close()
-    conn.close()
+    finally:
+        cur.close()
+        put_db(conn)
+
     return redirect("/cadastros?m=" + quote_plus(msg))
 
 
@@ -964,90 +997,91 @@ def cadastros():
     if not require_login() or not is_admin():
         return redirect("/")
 
-    conn = get_db()
-    cur = conn.cursor()
     msg = request.args.get("m", "") or ""
 
-    if request.method == "POST":
-        require_csrf()
-        if request.form.get("obra", "").strip():
-            try:
-                cur.execute("INSERT INTO obras (nome) VALUES (%s)", (request.form["obra"].strip(),))
-                conn.commit()
-                msg = "ok:Obra cadastrada!"
-            except:
-                conn.rollback()
-                msg = "err:Obra ja existe."
-        if request.form.get("servico", "").strip() and request.form.get("unidade", "").strip():
-            try:
-                cur.execute(
-                    "INSERT INTO servicos (nome,unidade) VALUES (%s,%s)",
-                    (request.form["servico"].strip(), request.form["unidade"].strip()),
-                )
-                conn.commit()
-                msg = "ok:Servico cadastrado!"
-            except:
-                conn.rollback()
-                msg = "err:Servico ja existe."
-        if request.form.get("insumo", "").strip() and request.form.get("unidade_insumo", "").strip():
-            try:
-                cur.execute(
-                    "INSERT INTO insumos (nome,unidade) VALUES (%s,%s)",
-                    (request.form["insumo"].strip(), request.form["unidade_insumo"].strip()),
-                )
-                conn.commit()
-                msg = "ok:Insumo cadastrado!"
-            except:
-                conn.rollback()
-                msg = "err:Insumo ja existe."
-        if request.form.get("funcao", "").strip():
-            try:
-                cur.execute("INSERT INTO funcoes (nome) VALUES (%s)", (request.form["funcao"].strip(),))
-                conn.commit()
-                msg = "ok:Funcao cadastrada!"
-            except:
-                conn.rollback()
-                msg = "err:Funcao ja existe."
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        if request.method == "POST":
+            require_csrf()
+            if request.form.get("obra", "").strip():
+                try:
+                    cur.execute("INSERT INTO obras (nome) VALUES (%s)", (request.form["obra"].strip(),))
+                    conn.commit()
+                    msg = "ok:Obra cadastrada!"
+                except:
+                    conn.rollback()
+                    msg = "err:Obra ja existe."
+            if request.form.get("servico", "").strip() and request.form.get("unidade", "").strip():
+                try:
+                    cur.execute(
+                        "INSERT INTO servicos (nome,unidade) VALUES (%s,%s)",
+                        (request.form["servico"].strip(), request.form["unidade"].strip()),
+                    )
+                    conn.commit()
+                    msg = "ok:Servico cadastrado!"
+                except:
+                    conn.rollback()
+                    msg = "err:Servico ja existe."
+            if request.form.get("insumo", "").strip() and request.form.get("unidade_insumo", "").strip():
+                try:
+                    cur.execute(
+                        "INSERT INTO insumos (nome,unidade) VALUES (%s,%s)",
+                        (request.form["insumo"].strip(), request.form["unidade_insumo"].strip()),
+                    )
+                    conn.commit()
+                    msg = "ok:Insumo cadastrado!"
+                except:
+                    conn.rollback()
+                    msg = "err:Insumo ja existe."
+            if request.form.get("funcao", "").strip():
+                try:
+                    cur.execute("INSERT INTO funcoes (nome) VALUES (%s)", (request.form["funcao"].strip(),))
+                    conn.commit()
+                    msg = "ok:Funcao cadastrada!"
+                except:
+                    conn.rollback()
+                    msg = "err:Funcao ja existe."
 
-    cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras = [o[0] for o in cur.fetchall()]
+        cur.execute("SELECT nome FROM obras ORDER BY nome")
+        obras = [o[0] for o in cur.fetchall()]
 
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos = cur.fetchall()
+        cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
+        servicos = cur.fetchall()
 
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos = cur.fetchall()
+        cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
+        insumos = cur.fetchall()
 
-    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes = [f[0] for f in cur.fetchall()]
+        cur.execute("SELECT nome FROM funcoes ORDER BY nome")
+        funcoes = [f[0] for f in cur.fetchall()]
 
-    # contagens de uso (para avisar no confirm)
-    cur.execute("SELECT obra, COUNT(*) FROM produtividade GROUP BY obra")
-    uso_obras = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+        # contagens de uso (para avisar no confirm)
+        cur.execute("SELECT obra, COUNT(*) FROM produtividade GROUP BY obra")
+        uso_obras = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
 
-    cur.execute("SELECT servico, COUNT(*) FROM produtividade GROUP BY servico")
-    uso_servicos = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+        cur.execute("SELECT servico, COUNT(*) FROM produtividade GROUP BY servico")
+        uso_servicos = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
 
-    cur.execute(
+        cur.execute(
+            """
+          SELECT k, COUNT(*)
+          FROM produtividade, LATERAL jsonb_object_keys(funcoes) AS k
+          GROUP BY k
         """
-      SELECT k, COUNT(*)
-      FROM produtividade, LATERAL jsonb_object_keys(funcoes) AS k
-      GROUP BY k
-    """
-    )
-    uso_funcoes = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+        )
+        uso_funcoes = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
 
-    cur.execute(
+        cur.execute(
+            """
+          SELECT k, COUNT(*)
+          FROM produtividade, LATERAL jsonb_object_keys(insumos) AS k
+          GROUP BY k
         """
-      SELECT k, COUNT(*)
-      FROM produtividade, LATERAL jsonb_object_keys(insumos) AS k
-      GROUP BY k
-    """
-    )
-    uso_insumos = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
-
-    cur.close()
-    conn.close()
+        )
+        uso_insumos = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+    finally:
+        cur.close()
+        put_db(conn)
 
     def get_uso(tipo_, nome_):
         if tipo_ == "obra":
@@ -1137,10 +1171,12 @@ def usuarios():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id,nome,email,tipo FROM usuarios ORDER BY id")
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("SELECT id,nome,email,tipo FROM usuarios ORDER BY id")
+        users = cur.fetchall()
+    finally:
+        cur.close()
+        put_db(conn)
 
     rows = ""
     for uid, nome, email, tipo in users:
@@ -1182,12 +1218,16 @@ def usuarios_excluir():
         uid = 0
     if uid <= 0 or uid == session["user_id"]:
         return redirect("/usuarios")
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM usuarios WHERE id=%s", (uid,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("DELETE FROM usuarios WHERE id=%s", (uid,))
+        conn.commit()
+    finally:
+        cur.close()
+        put_db(conn)
+
     return redirect("/usuarios")
 
 
@@ -1198,31 +1238,30 @@ def usuarios_reset_senha(uid):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id,nome,email,tipo FROM usuarios WHERE id=%s", (uid,))
-    user = cur.fetchone()
-    if not user:
-        cur.close()
-        conn.close()
-        abort(404)
+    try:
+        cur.execute("SELECT id,nome,email,tipo FROM usuarios WHERE id=%s", (uid,))
+        user = cur.fetchone()
+        if not user:
+            abort(404)
 
-    msg = ""
-    if request.method == "POST":
-        require_csrf()
-        n = request.form.get("nova_senha", "").strip()
-        n2 = request.form.get("nova_senha2", "").strip()
-        if n != n2:
-            msg = "err:As senhas nao conferem."
-        else:
-            ok, m = password_policy_ok(n)
-            if not ok:
-                msg = f"err:{m}"
+        msg = ""
+        if request.method == "POST":
+            require_csrf()
+            n = request.form.get("nova_senha", "").strip()
+            n2 = request.form.get("nova_senha2", "").strip()
+            if n != n2:
+                msg = "err:As senhas nao conferem."
             else:
-                cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s", (generate_password_hash(n), uid))
-                conn.commit()
-                msg = "ok:Senha resetada!"
-
-    cur.close()
-    conn.close()
+                ok, m = password_policy_ok(n)
+                if not ok:
+                    msg = f"err:{m}"
+                else:
+                    cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s", (generate_password_hash(n), uid))
+                    conn.commit()
+                    msg = "ok:Senha resetada!"
+    finally:
+        cur.close()
+        put_db(conn)
 
     c = f"""<a href="/usuarios" class="back">← Voltar</a>
     {alert(msg)}
@@ -1246,13 +1285,15 @@ def exportar():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT p.id,p.obra,p.servico,p.servico_unidade,p.quantidade,p.horas,p.funcoes,p.insumos,p.observacao,p.data,p.user_id,u.nome "
-        "FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC"
-    )
-    dados = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "SELECT p.id,p.obra,p.servico,p.servico_unidade,p.quantidade,p.horas,p.funcoes,p.insumos,p.observacao,p.data,p.user_id,u.nome "
+            "FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC"
+        )
+        dados = cur.fetchall()
+    finally:
+        cur.close()
+        put_db(conn)
 
     wb = Workbook()
     ws = wb.active
