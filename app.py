@@ -83,6 +83,14 @@ def ping():
     return "ok", 200
 
 
+@app.route("/sw.js")
+def service_worker():
+    return app.send_static_file("sw.js"), 200, {
+        "Content-Type": "application/javascript",
+        "Service-Worker-Allowed": "/"
+    }
+
+
 @app.route("/manifest.json")
 def manifest():
     data = {"name":"Reobote Home","short_name":"Reobote Produtividade","description":"Registro de Produtividade e Consumo",
