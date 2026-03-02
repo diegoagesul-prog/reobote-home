@@ -23,10 +23,14 @@ def get_db():
 
 
 def safe_json_load(x):
-    if x is None: return {}
-    if isinstance(x, (dict, list)): return x
-    try: return json.loads(x)
-    except: return {}
+    if x is None:
+        return {}
+    if isinstance(x, (dict, list)):
+        return x
+    try:
+        return json.loads(x)
+    except:
+        return {}
 
 
 def csrf_token():
@@ -38,7 +42,7 @@ def csrf_token():
 
 
 def require_csrf():
-    if request.form.get("_csrf","") != session.get("_csrf",""):
+    if request.form.get("_csrf", "") != session.get("_csrf", ""):
         abort(400)
 
 
@@ -52,27 +56,52 @@ def require_login():
 
 def password_policy_ok(pw):
     pw = pw or ""
-    if len(pw) < 8: return False, "Minimo 8 caracteres."
+    if len(pw) < 8:
+        return False, "Minimo 8 caracteres."
     if not any(c.isalpha() for c in pw) or not any(c.isdigit() for c in pw):
         return False, "Pelo menos 1 letra e 1 numero."
     return True, ""
 
 
+def fmt_num(x, dec=2):
+    """Formata numero removendo zeros à direita. Se for 0/None -> ''."""
+    if x is None:
+        return ""
+    try:
+        v = float(x)
+    except:
+        return ""
+    if v == 0:
+        return ""
+    s = f"{v:.{dec}f}".rstrip("0").rstrip(".")
+    return s
+
+
 def init_db():
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, email TEXT UNIQUE, senha TEXT, tipo TEXT);")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, email TEXT UNIQUE, senha TEXT, tipo TEXT);"
+    )
     cur.execute("CREATE TABLE IF NOT EXISTS obras (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
     cur.execute("CREATE TABLE IF NOT EXISTS servicos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
     cur.execute("CREATE TABLE IF NOT EXISTS insumos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
     cur.execute("CREATE TABLE IF NOT EXISTS funcoes (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
-    cur.execute("CREATE TABLE IF NOT EXISTS produtividade (id SERIAL PRIMARY KEY, obra TEXT, servico TEXT, servico_unidade TEXT, quantidade DOUBLE PRECISION, horas DOUBLE PRECISION, funcoes JSONB, insumos JSONB, observacao TEXT, data TEXT, user_id INTEGER);")
-    ae = os.environ.get("ADMIN_EMAIL"); ap = os.environ.get("ADMIN_PASSWORD")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS produtividade (id SERIAL PRIMARY KEY, obra TEXT, servico TEXT, servico_unidade TEXT, quantidade DOUBLE PRECISION, horas DOUBLE PRECISION, funcoes JSONB, insumos JSONB, observacao TEXT, data TEXT, user_id INTEGER);"
+    )
+    ae = os.environ.get("ADMIN_EMAIL")
+    ap = os.environ.get("ADMIN_PASSWORD")
     if ae and ap:
         ok, _ = password_policy_ok(ap)
         if ok:
-            cur.execute("INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING;",
-                        ("Administrador", ae.strip().lower(), generate_password_hash(ap), "admin"))
-    conn.commit(); cur.close(); conn.close()
+            cur.execute(
+                "INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING;",
+                ("Administrador", ae.strip().lower(), generate_password_hash(ap), "admin"),
+            )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 init_db()
@@ -87,16 +116,25 @@ def ping():
 def service_worker():
     return app.send_static_file("sw.js"), 200, {
         "Content-Type": "application/javascript",
-        "Service-Worker-Allowed": "/"
+        "Service-Worker-Allowed": "/",
     }
 
 
 @app.route("/manifest.json")
 def manifest():
-    data = {"name":"Reobote Home","short_name":"Reobote Produtividade","description":"Registro de Produtividade e Consumo",
-            "start_url":"/dashboard","display":"standalone","background_color":"#1a1a2e","theme_color":"#1a1a2e",
-            "icons":[{"src":"/static/icon-192.png","sizes":"192x192","type":"image/png"},
-                     {"src":"/static/icon-512.png","sizes":"512x512","type":"image/png"}]}
+    data = {
+        "name": "Reobote Home",
+        "short_name": "Reobote Produtividade",
+        "description": "Registro de Produtividade e Consumo",
+        "start_url": "/dashboard",
+        "display": "standalone",
+        "background_color": "#1a1a2e",
+        "theme_color": "#1a1a2e",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        ],
+    }
     return Response(json.dumps(data), mimetype="application/json")
 
 
@@ -221,7 +259,7 @@ textarea{resize:vertical;min-height:74px;}
 .login-logo{height:52px;margin-bottom:6px;}
 .login-sub{font-family:'Rajdhani',sans-serif;font-size:.7rem;letter-spacing:.18em;color:rgba(255,255,255,.3);text-transform:uppercase;margin-bottom:28px;}
 .login-card{background:#fff;border-radius:16px;padding:26px 22px;width:100%;max-width:350px;box-shadow:0 20px 60px rgba(0,0,0,.4);}
-.login-card h4{font-family:'Rajdhani',sans-serif;font-size:1.15rem;font-weight:700;letter-spacing:.06em;color:var(--dark);margin-bottom:18px;text-transform:uppercase;}
+.login-card h4{font-family:'Rajdhani',sans-serif;font-size:.15rem;font-weight:700;letter-spacing:.06em;color:var(--dark);margin-bottom:18px;text-transform:uppercase;}
 
 .back{display:inline-flex;align-items:center;gap:5px;font-size:.81rem;font-weight:600;color:var(--gold-d);text-decoration:none;margin-bottom:12px;}
 .back:hover{color:var(--gold);}
@@ -270,7 +308,7 @@ function togAcc(id){
   const body=el.querySelector('.acc-body');
   const arr=el.querySelector('.acc-arr');
   if(body.style.display==='none'){body.style.display='block';arr.classList.add('open');}
-  else{body.style.display='none';arr.classList.remove('open');}
+  else{body.style.display==='none';arr.classList.remove('open');}
 }
 let tsS=null,tsF=null,tsI=null;
 function setSrvUnid(){
@@ -326,27 +364,36 @@ def render(conteudo, show_header=True):
 
 
 def alert(msg):
-    if not msg: return ""
-    tipo, texto = msg.split(":",1)
-    cls = "a-ok" if tipo=="ok" else "a-err"
-    icon = "✓" if tipo=="ok" else "⚠"
+    if not msg:
+        return ""
+    if ":" not in msg:
+        return f'<div class="alert a-err">⚠ {msg}</div>'
+    tipo, texto = msg.split(":", 1)
+    cls = "a-ok" if tipo == "ok" else "a-err"
+    icon = "✓" if tipo == "ok" else "⚠"
     return f'<div class="alert {cls}">{icon} {texto}</div>'
 
 
-@app.route("/", methods=["GET","POST"])
+@app.route("/", methods=["GET", "POST"])
 def login():
-    msg=""
-    if request.method=="POST":
-        email=request.form.get("email","").strip().lower()
-        senha=request.form.get("senha","").strip()
-        conn=get_db();cur=conn.cursor()
-        cur.execute("SELECT id,nome,email,senha,tipo FROM usuarios WHERE email=%s",(email,))
-        user=cur.fetchone();cur.close();conn.close()
-        if user and check_password_hash(user[3],senha):
-            session["user_id"]=user[0];session["nome"]=user[1] or "";session["tipo"]=user[4] or "usuario"
-            csrf_token();return redirect("/dashboard")
-        msg="E-mail ou senha incorretos."
-    c=f"""<img src="/static/logo.png" class="login-logo" alt="Reobote">
+    msg = ""
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        senha = request.form.get("senha", "").strip()
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT id,nome,email,senha,tipo FROM usuarios WHERE email=%s", (email,))
+        user = cur.fetchone()
+        cur.close()
+        conn.close()
+        if user and check_password_hash(user[3], senha):
+            session["user_id"] = user[0]
+            session["nome"] = user[1] or ""
+            session["tipo"] = user[4] or "usuario"
+            csrf_token()
+            return redirect("/dashboard")
+        msg = "E-mail ou senha incorretos."
+    c = f"""<img src="/static/logo.png" class="login-logo" alt="Reobote">
     <div class="login-sub">Produtividade &amp; Consumo</div>
     <div class="login-card">
       <h4>Acesso</h4>
@@ -363,31 +410,45 @@ def login():
 
 @app.route("/logout")
 def logout():
-    session.clear();return redirect("/")
+    session.clear()
+    return redirect("/")
 
 
-@app.route("/minha_senha", methods=["GET","POST"])
+@app.route("/minha_senha", methods=["GET", "POST"])
 def minha_senha():
-    if not require_login(): return redirect("/")
-    msg=""
-    if request.method=="POST":
+    if not require_login():
+        return redirect("/")
+    msg = ""
+    if request.method == "POST":
         require_csrf()
-        sa=request.form.get("senha_atual","").strip()
-        n=request.form.get("nova_senha","").strip()
-        n2=request.form.get("nova_senha2","").strip()
-        if n!=n2: msg="err:As senhas nao conferem."
+        sa = request.form.get("senha_atual", "").strip()
+        n = request.form.get("nova_senha", "").strip()
+        n2 = request.form.get("nova_senha2", "").strip()
+        if n != n2:
+            msg = "err:As senhas nao conferem."
         else:
-            ok,m=password_policy_ok(n)
-            if not ok: msg=f"err:{m}"
+            ok, m = password_policy_ok(n)
+            if not ok:
+                msg = f"err:{m}"
             else:
-                conn=get_db();cur=conn.cursor()
-                cur.execute("SELECT senha FROM usuarios WHERE id=%s",(session["user_id"],))
-                row=cur.fetchone()
-                if not row or not check_password_hash(row[0],sa): msg="err:Senha atual incorreta.";cur.close();conn.close()
+                conn = get_db()
+                cur = conn.cursor()
+                cur.execute("SELECT senha FROM usuarios WHERE id=%s", (session["user_id"],))
+                row = cur.fetchone()
+                if not row or not check_password_hash(row[0], sa):
+                    msg = "err:Senha atual incorreta."
+                    cur.close()
+                    conn.close()
                 else:
-                    cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s",(generate_password_hash(n),session["user_id"]))
-                    conn.commit();cur.close();conn.close();msg="ok:Senha alterada!"
-    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+                    cur.execute(
+                        "UPDATE usuarios SET senha=%s WHERE id=%s",
+                        (generate_password_hash(n), session["user_id"]),
+                    )
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    msg = "ok:Senha alterada!"
+    c = f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card">
       <div class="ctitle">Minha Senha</div>
@@ -404,91 +465,140 @@ def minha_senha():
 
 
 def load_dropdowns():
-    conn=get_db();cur=conn.cursor()
+    conn = get_db()
+    cur = conn.cursor()
     cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras=[o[0] for o in cur.fetchall()]
+    obras = [o[0] for o in cur.fetchall()]
     cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos=cur.fetchall()
+    servicos = cur.fetchall()
     cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes=[f[0] for f in cur.fetchall()]
+    funcoes = [f[0] for f in cur.fetchall()]
     cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos=cur.fetchall()
-    cur.close();conn.close()
-    return obras,servicos,funcoes,insumos
+    insumos = cur.fetchall()
+    cur.close()
+    conn.close()
+    return obras, servicos, funcoes, insumos
 
 
 def can_edit(uid):
-    if is_admin(): return True
-    return int(uid or 0)==int(session.get("user_id",0))
+    if is_admin():
+        return True
+    return int(uid or 0) == int(session.get("user_id", 0))
 
 
 def form_funcoes_insumos(funcoes, insumos):
-    fo="".join([f'<option value="{f}">{f}</option>' for f in funcoes])
-    io="".join([f'<option value="{n}" data-unidade="{u}">{n} ({u})</option>' for n,u in insumos])
+    fo = "".join([f'<option value="{f}">{f}</option>' for f in funcoes])
+    io = "".join([f'<option value="{n}" data-unidade="{u}">{n} ({u})</option>' for n, u in insumos])
     return fo, io
 
 
-@app.route("/dashboard", methods=["GET","POST"])
+@app.route("/dashboard", methods=["GET", "POST"])
 def dashboard():
-    if not require_login(): return redirect("/")
-    conn=get_db();cur=conn.cursor()
+    if not require_login():
+        return redirect("/")
+    conn = get_db()
+    cur = conn.cursor()
     cur.execute("SELECT nome FROM obras ORDER BY nome")
-    obras=[o[0] for o in cur.fetchall()]
+    obras = [o[0] for o in cur.fetchall()]
     cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
-    servicos=cur.fetchall()
+    servicos = cur.fetchall()
     cur.execute("SELECT nome FROM funcoes ORDER BY nome")
-    funcoes=[f[0] for f in cur.fetchall()]
+    funcoes = [f[0] for f in cur.fetchall()]
     cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
-    insumos=cur.fetchall()
-    msg=""
-    if request.method=="POST":
+    insumos = cur.fetchall()
+    msg = ""
+    if request.method == "POST":
         require_csrf()
-        obra=request.form.get("obra","").strip()
-        servico=request.form.get("servico","").strip()
-        su=request.form.get("servico_unidade","").strip()
-        obs=request.form.get("observacao","").strip()
-        try: qtd=float(request.form.get("quantidade","0"))
-        except: qtd=0.0
-        try: hrs=float(request.form.get("horas","0"))
-        except: hrs=0.0
-        fn=request.form.getlist("funcoes_nome[]");fq=request.form.getlist("funcoes_qtd[]")
-        fu={}
-        for n,q in zip(fn,fq):
-            n=(n or "").strip()
-            try: qi=int(q)
-            except: qi=0
-            if n and qi>0: fu[n]=fu.get(n,0)+qi
-        ins_n=request.form.getlist("insumos_nome[]");ins_q=request.form.getlist("insumos_qtd[]");ins_u=request.form.getlist("insumos_unid[]")
-        iu={}
-        for n,q,u in zip(ins_n,ins_q,ins_u):
-            n=(n or "").strip();u=(u or "").strip() or "un"
-            try: qf=float(q)
-            except: qf=0.0
-            if n and qf>0:
-                if n in iu: iu[n]["quantidade"]=float(iu[n]["quantidade"])+qf
-                else: iu[n]={"quantidade":qf,"unidade":u}
-        if obra and servico and su and qtd>0 and hrs>0:
-            cur.execute("INSERT INTO produtividade (obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (obra,servico,su,qtd,hrs,psycopg2.extras.Json(fu),psycopg2.extras.Json(iu),obs,datetime.now().strftime("%d/%m/%Y"),session["user_id"]))
-            conn.commit();msg="ok:Registro salvo!"
-        else: msg="err:Preencha Obra, Servico, Quantidade e Horas."
+        obra = request.form.get("obra", "").strip()
+        servico = request.form.get("servico", "").strip()
+        su = request.form.get("servico_unidade", "").strip()
+        obs = request.form.get("observacao", "").strip()
+        try:
+            qtd = float(request.form.get("quantidade", "0"))
+        except:
+            qtd = 0.0
+        try:
+            hrs = float(request.form.get("horas", "0"))
+        except:
+            hrs = 0.0
+        fn = request.form.getlist("funcoes_nome[]")
+        fq = request.form.getlist("funcoes_qtd[]")
+        fu = {}
+        for n, q in zip(fn, fq):
+            n = (n or "").strip()
+            try:
+                qi = int(q)
+            except:
+                qi = 0
+            if n and qi > 0:
+                fu[n] = fu.get(n, 0) + qi
+        ins_n = request.form.getlist("insumos_nome[]")
+        ins_q = request.form.getlist("insumos_qtd[]")
+        ins_u = request.form.getlist("insumos_unid[]")
+        iu = {}
+        for n, q, u in zip(ins_n, ins_q, ins_u):
+            n = (n or "").strip()
+            u = (u or "").strip() or "un"
+            try:
+                qf = float(q)
+            except:
+                qf = 0.0
+            if n and qf > 0:
+                if n in iu:
+                    iu[n]["quantidade"] = float(iu[n]["quantidade"]) + qf
+                else:
+                    iu[n] = {"quantidade": qf, "unidade": u}
+        if obra and servico and su and qtd > 0 and hrs > 0:
+            cur.execute(
+                "INSERT INTO produtividade (obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    obra,
+                    servico,
+                    su,
+                    qtd,
+                    hrs,
+                    psycopg2.extras.Json(fu),
+                    psycopg2.extras.Json(iu),
+                    obs,
+                    datetime.now().strftime("%d/%m/%Y"),
+                    session["user_id"],
+                ),
+            )
+            conn.commit()
+            msg = "ok:Registro salvo!"
+        else:
+            msg = "err:Preencha Obra, Servico, Quantidade e Horas."
+
     if is_admin():
-        cur.execute("SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 20")
+        cur.execute(
+            "SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 20"
+        )
     else:
-        cur.execute("SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id WHERE p.user_id=%s ORDER BY p.id DESC LIMIT 20",(session["user_id"],))
-    recent=cur.fetchall();cur.close();conn.close()
-    oo="".join([f'<option value="{o}">{o}</option>' for o in obras])
-    so="".join([f'<option value="{s}" data-unidade="{u}">{s} ({u})</option>' for s,u in servicos])
-    fo,io=form_funcoes_insumos(funcoes,insumos)
-    rcs=""
-    for rid,d,ob,sv,qt,hr,un in recent:
-        df=f'<form method="POST" action="/produtividade/excluir/{rid}" style="display:inline;"><input type="hidden" name="_csrf" value="{csrf_token()}"><button class="btn-sm btn-del" onclick="return confirm(\'Excluir?\')">Excluir</button></form>'
-        ut=f'<span class="mini" style="margin-left:auto;">{un or ""}</span>' if is_admin() else ""
-        rcs+=f'<div class="rc"><div class="rc-top"><div class="rc-obra">{ob or ""}</div><div class="rc-date">{d or ""}</div></div><div class="rc-srv">{sv or ""}</div><div class="rc-nums"><div>Qtd: <strong>{qt or 0}</strong></div><div>Horas: <strong>{hr or 0}</strong></div></div><div class="rc-act"><a class="btn-sm btn-edit" href="/produtividade/editar/{rid}">Editar</a>{df}{ut}</div></div>'
-    adm=""
+        cur.execute(
+            "SELECT p.id,p.data,p.obra,p.servico,p.quantidade,p.horas,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id WHERE p.user_id=%s ORDER BY p.id DESC LIMIT 20",
+            (session["user_id"],),
+        )
+    recent = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    oo = "".join([f'<option value="{o}">{o}</option>' for o in obras])
+    so = "".join([f'<option value="{s}" data-unidade="{u}">{s} ({u})</option>' for s, u in servicos])
+    fo, io = form_funcoes_insumos(funcoes, insumos)
+
+    rcs = ""
+    for rid, d, ob, sv, qt, hr, un in recent:
+        df = f'<form method="POST" action="/produtividade/excluir/{rid}" style="display:inline;"><input type="hidden" name="_csrf" value="{csrf_token()}"><button class="btn-sm btn-del" onclick="return confirm(\\'Excluir?\\')">Excluir</button></form>'
+        ut = f'<span class="mini" style="margin-left:auto;">{un or ""}</span>' if is_admin() else ""
+        qts = fmt_num(qt, 2) or "—"
+        hrs = fmt_num(hr, 1) or "—"
+        rcs += f'<div class="rc"><div class="rc-top"><div class="rc-obra">{ob or ""}</div><div class="rc-date">{d or ""}</div></div><div class="rc-srv">{sv or ""}</div><div class="rc-nums"><div>Qtd: <strong>{qts}</strong></div><div>Horas: <strong>{hrs}</strong></div></div><div class="rc-act"><a class="btn-sm btn-edit" href="/produtividade/editar/{rid}">Editar</a>{df}{ut}</div></div>'
+
+    adm = ""
     if is_admin():
-        adm=f'<div class="card"><div class="ctitle">Administracao</div><div class="agrid"><a href="/exportar" class="btn btn-dark" style="font-size:.82rem;padding:11px;">Exportar Excel</a><a href="/criar_usuario" class="btn btn-warn" style="font-size:.82rem;padding:11px;">Criar Usuario</a><a href="/cadastros" class="btn btn-info" style="font-size:.82rem;padding:11px;">Cadastros</a><a href="/usuarios" class="btn btn-purple" style="font-size:.82rem;padding:11px;">Usuarios</a></div></div>'
-    c=f"""{alert(msg)}
+        adm = f'<div class="card"><div class="ctitle">Administracao</div><div class="agrid"><a href="/exportar" class="btn btn-dark" style="font-size:.82rem;padding:11px;">Exportar Excel</a><a href="/criar_usuario" class="btn btn-warn" style="font-size:.82rem;padding:11px;">Criar Usuario</a><a href="/cadastros" class="btn btn-info" style="font-size:.82rem;padding:11px;">Cadastros</a><a href="/usuarios" class="btn btn-purple" style="font-size:.82rem;padding:11px;">Usuarios</a></div></div>'
+
+    c = f"""{alert(msg)}
     <div class="card">
       <div class="ctitle">Novo Registro</div>
       <form method="POST">
@@ -519,67 +629,120 @@ def dashboard():
     return render(c)
 
 
-@app.route("/produtividade/editar/<int:rid>", methods=["GET","POST"])
+@app.route("/produtividade/editar/<int:rid>", methods=["GET", "POST"])
 def produtividade_editar(rid):
-    if not require_login(): return redirect("/")
-    conn=get_db();cur=conn.cursor()
-    cur.execute("SELECT id,obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id FROM produtividade WHERE id=%s",(rid,))
-    reg=cur.fetchone()
-    if not reg: cur.close();conn.close();abort(404)
-    (rid,obra,servico,su,qtd,hrs,fr,ir,obs,data,uid)=reg
-    if not can_edit(uid): cur.close();conn.close();abort(403)
-    obras,servicos,funcoes,insumos=load_dropdowns()
-    msg=""
-    if request.method=="POST":
+    if not require_login():
+        return redirect("/")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,obra,servico,servico_unidade,quantidade,horas,funcoes,insumos,observacao,data,user_id FROM produtividade WHERE id=%s",
+        (rid,),
+    )
+    reg = cur.fetchone()
+    if not reg:
+        cur.close()
+        conn.close()
+        abort(404)
+    (rid, obra, servico, su, qtd, hrs, fr, ir, obs, data, uid) = reg
+    if not can_edit(uid):
+        cur.close()
+        conn.close()
+        abort(403)
+    obras, servicos, funcoes, insumos = load_dropdowns()
+    msg = ""
+    if request.method == "POST":
         require_csrf()
-        on=request.form.get("obra","").strip();sn=request.form.get("servico","").strip()
-        sun=request.form.get("servico_unidade","").strip();on2=request.form.get("observacao","").strip()
-        try: qn=float(request.form.get("quantidade","0"))
-        except: qn=0.0
-        try: hn=float(request.form.get("horas","0"))
-        except: hn=0.0
-        fn=request.form.getlist("funcoes_nome[]");fq=request.form.getlist("funcoes_qtd[]")
-        fu={}
-        for n,q in zip(fn,fq):
-            n=(n or "").strip()
-            try: qi=int(q)
-            except: qi=0
-            if n and qi>0: fu[n]=fu.get(n,0)+qi
-        ins_n=request.form.getlist("insumos_nome[]");ins_q=request.form.getlist("insumos_qtd[]");ins_u=request.form.getlist("insumos_unid[]")
-        iu={}
-        for n,q,u in zip(ins_n,ins_q,ins_u):
-            n=(n or "").strip();u=(u or "").strip() or "un"
-            try: qf=float(q)
-            except: qf=0.0
-            if n and qf>0:
-                if n in iu: iu[n]["quantidade"]=float(iu[n]["quantidade"])+qf
-                else: iu[n]={"quantidade":qf,"unidade":u}
-        if on and sn and sun and qn>0 and hn>0:
-            cur.execute("UPDATE produtividade SET obra=%s,servico=%s,servico_unidade=%s,quantidade=%s,horas=%s,funcoes=%s,insumos=%s,observacao=%s WHERE id=%s",
-                        (on,sn,sun,qn,hn,psycopg2.extras.Json(fu),psycopg2.extras.Json(iu),on2,rid))
-            conn.commit();msg="ok:Atualizado!";obra,servico,su,qtd,hrs,obs=on,sn,sun,qn,hn,on2;fr,ir=fu,iu
-        else: msg="err:Preencha todos os campos obrigatorios."
-    cur.close();conn.close()
-    oo="".join([f'<option value="{o}" {"selected" if o==obra else ""}>{o}</option>' for o in obras])
-    so="".join([f'<option value="{s}" data-unidade="{u}" {"selected" if s==servico else ""}>{s} ({u})</option>' for s,u in servicos])
-    fo,io=form_funcoes_insumos(funcoes,insumos)
-    fd=safe_json_load(fr) or {};id_=safe_json_load(ir) or {}
-    fb=""
-    if isinstance(fd,dict):
-        for n,q in fd.items():
-            try: qi=int(q)
-            except: qi=0
-            if n and qi>0: fb+=f'<div class="tag"><span>{n} — {qi}</span><button type="button" class="tag-x" onclick="this.closest(\'.tag\').remove()">x</button><input type="hidden" name="funcoes_nome[]" value="{n}"><input type="hidden" name="funcoes_qtd[]" value="{qi}"></div>'
-    ib=""
-    if isinstance(id_,dict):
-        for n,v in id_.items():
-            if not n: continue
-            if isinstance(v,dict): qf=v.get("quantidade",0);uu=v.get("unidade","un")
-            else: qf=v;uu="un"
-            try: qf=float(qf)
-            except: qf=0.0
-            if qf>0: ib+=f'<div class="tag"><span>{n} — {qf} {uu}</span><button type="button" class="tag-x" onclick="this.closest(\'.tag\').remove()">x</button><input type="hidden" name="insumos_nome[]" value="{n}"><input type="hidden" name="insumos_qtd[]" value="{qf}"><input type="hidden" name="insumos_unid[]" value="{uu}"></div>'
-    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+        on = request.form.get("obra", "").strip()
+        sn = request.form.get("servico", "").strip()
+        sun = request.form.get("servico_unidade", "").strip()
+        on2 = request.form.get("observacao", "").strip()
+        try:
+            qn = float(request.form.get("quantidade", "0"))
+        except:
+            qn = 0.0
+        try:
+            hn = float(request.form.get("horas", "0"))
+        except:
+            hn = 0.0
+        fn = request.form.getlist("funcoes_nome[]")
+        fq = request.form.getlist("funcoes_qtd[]")
+        fu = {}
+        for n, q in zip(fn, fq):
+            n = (n or "").strip()
+            try:
+                qi = int(q)
+            except:
+                qi = 0
+            if n and qi > 0:
+                fu[n] = fu.get(n, 0) + qi
+        ins_n = request.form.getlist("insumos_nome[]")
+        ins_q = request.form.getlist("insumos_qtd[]")
+        ins_u = request.form.getlist("insumos_unid[]")
+        iu = {}
+        for n, q, u in zip(ins_n, ins_q, ins_u):
+            n = (n or "").strip()
+            u = (u or "").strip() or "un"
+            try:
+                qf = float(q)
+            except:
+                qf = 0.0
+            if n and qf > 0:
+                if n in iu:
+                    iu[n]["quantidade"] = float(iu[n]["quantidade"]) + qf
+                else:
+                    iu[n] = {"quantidade": qf, "unidade": u}
+        if on and sn and sun and qn > 0 and hn > 0:
+            cur.execute(
+                "UPDATE produtividade SET obra=%s,servico=%s,servico_unidade=%s,quantidade=%s,horas=%s,funcoes=%s,insumos=%s,observacao=%s WHERE id=%s",
+                (on, sn, sun, qn, hn, psycopg2.extras.Json(fu), psycopg2.extras.Json(iu), on2, rid),
+            )
+            conn.commit()
+            msg = "ok:Atualizado!"
+            obra, servico, su, qtd, hrs, obs = on, sn, sun, qn, hn, on2
+            fr, ir = fu, iu
+        else:
+            msg = "err:Preencha todos os campos obrigatorios."
+    cur.close()
+    conn.close()
+
+    oo = "".join([f'<option value="{o}" {"selected" if o==obra else ""}>{o}</option>' for o in obras])
+    so = "".join(
+        [f'<option value="{s}" data-unidade="{u}" {"selected" if s==servico else ""}>{s} ({u})</option>' for s, u in servicos]
+    )
+    fo, io = form_funcoes_insumos(funcoes, insumos)
+    fd = safe_json_load(fr) or {}
+    id_ = safe_json_load(ir) or {}
+
+    fb = ""
+    if isinstance(fd, dict):
+        for n, q in fd.items():
+            try:
+                qi = int(q)
+            except:
+                qi = 0
+            if n and qi > 0:
+                fb += f'<div class="tag"><span>{n} — {qi}</span><button type="button" class="tag-x" onclick="this.closest(\'.tag\').remove()">x</button><input type="hidden" name="funcoes_nome[]" value="{n}"><input type="hidden" name="funcoes_qtd[]" value="{qi}"></div>'
+
+    ib = ""
+    if isinstance(id_, dict):
+        for n, v in id_.items():
+            if not n:
+                continue
+            if isinstance(v, dict):
+                qf = v.get("quantidade", 0)
+                uu = v.get("unidade", "un")
+            else:
+                qf = v
+                uu = "un"
+            try:
+                qf = float(qf)
+            except:
+                qf = 0.0
+            if qf > 0:
+                ib += f'<div class="tag"><span>{n} — {fmt_num(qf, 2)} {uu}</span><button type="button" class="tag-x" onclick="this.closest(\'.tag\').remove()">x</button><input type="hidden" name="insumos_nome[]" value="{n}"><input type="hidden" name="insumos_qtd[]" value="{qf}"><input type="hidden" name="insumos_unid[]" value="{uu}"></div>'
+
+    c = f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card">
       <div class="ctitle">Editar #{rid}</div>
@@ -589,10 +752,10 @@ def produtividade_editar(rid):
         <div class="fl"><label class="fl-label">Obra</label><select name="obra" required><option value="">Selecione...</option>{oo}</select></div>
         <div class="fl"><label class="fl-label">Servico</label><select id="servico_select" name="servico" required><option value="">Selecione...</option>{so}</select></div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <div style="flex:1;"><label class="fl-label">Quantidade executada</label><input type="number" name="quantidade" step="0.01" value="{qtd or ""}" required></div>
+          <div style="flex:1;"><label class="fl-label">Quantidade executada</label><input type="number" name="quantidade" step="0.01" value="{fmt_num(qtd,2)}" required></div>
           <div style="width:76px;"><label class="fl-label">Unidade</label><div class="upill" id="sb" style="width:100%;">{su or "—"}</div><input type="hidden" name="servico_unidade" id="servico_unidade" value="{su or ""}"></div>
         </div>
-        <div class="fl"><label class="fl-label">Horas trabalhadas</label><input type="number" name="horas" step="0.1" value="{hrs or ""}" required></div>
+        <div class="fl"><label class="fl-label">Horas trabalhadas</label><input type="number" name="horas" step="0.1" value="{fmt_num(hrs,1)}" required></div>
         <div class="stitle">Funcoes</div>
         <div class="add-row"><select id="func_select"><option value=""></option>{fo}</select><input class="qty-box" type="number" id="fq" min="1" step="1" value="1"><button type="button" class="btn-plus" onclick="addFunc()">+</button></div>
         <div class="tags" id="fl">{fb}</div>
@@ -608,35 +771,58 @@ def produtividade_editar(rid):
 
 @app.route("/produtividade/excluir/<int:rid>", methods=["POST"])
 def produtividade_excluir(rid):
-    if not require_login(): return redirect("/")
+    if not require_login():
+        return redirect("/")
     require_csrf()
-    conn=get_db();cur=conn.cursor()
-    cur.execute("SELECT user_id FROM produtividade WHERE id=%s",(rid,))
-    row=cur.fetchone()
-    if not row: cur.close();conn.close();return redirect("/dashboard")
-    if not can_edit(row[0]): cur.close();conn.close();abort(403)
-    cur.execute("DELETE FROM produtividade WHERE id=%s",(rid,))
-    conn.commit();cur.close();conn.close();return redirect("/dashboard")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM produtividade WHERE id=%s", (rid,))
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        conn.close()
+        return redirect("/dashboard")
+    if not can_edit(row[0]):
+        cur.close()
+        conn.close()
+        abort(403)
+    cur.execute("DELETE FROM produtividade WHERE id=%s", (rid,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return redirect("/dashboard")
 
 
-@app.route("/criar_usuario", methods=["GET","POST"])
+@app.route("/criar_usuario", methods=["GET", "POST"])
 def criar_usuario():
-    if not require_login() or not is_admin(): return redirect("/")
-    msg=""
-    if request.method=="POST":
+    if not require_login() or not is_admin():
+        return redirect("/")
+    msg = ""
+    if request.method == "POST":
         require_csrf()
-        nome=request.form.get("nome","").strip();email=request.form.get("email","").strip().lower()
-        senha=request.form.get("senha","").strip();tipo=request.form.get("tipo","usuario")
-        ok,m=password_policy_ok(senha)
-        if not ok: msg=f"err:{m}"
+        nome = request.form.get("nome", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        senha = request.form.get("senha", "").strip()
+        tipo = request.form.get("tipo", "usuario")
+        ok, m = password_policy_ok(senha)
+        if not ok:
+            msg = f"err:{m}"
         else:
-            conn=get_db();cur=conn.cursor()
+            conn = get_db()
+            cur = conn.cursor()
             try:
-                cur.execute("INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s)",(nome,email,generate_password_hash(senha),tipo))
-                conn.commit();msg="ok:Usuario criado!"
-            except: conn.rollback();msg="err:E-mail ja cadastrado."
-            cur.close();conn.close()
-    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+                cur.execute(
+                    "INSERT INTO usuarios (nome,email,senha,tipo) VALUES (%s,%s,%s,%s)",
+                    (nome, email, generate_password_hash(senha), tipo),
+                )
+                conn.commit()
+                msg = "ok:Usuario criado!"
+            except:
+                conn.rollback()
+                msg = "err:E-mail ja cadastrado."
+            cur.close()
+            conn.close()
+    c = f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card">
       <div class="ctitle">Criar Usuario</div>
@@ -653,68 +839,214 @@ def criar_usuario():
     return render(c)
 
 
-@app.route("/cadastros", methods=["GET","POST"])
+@app.route("/cadastros/excluir", methods=["POST"])
+def cadastros_excluir():
+    if not require_login() or not is_admin():
+        return redirect("/")
+    require_csrf()
+
+    tipo = (request.form.get("tipo") or "").strip()
+    nome = (request.form.get("nome") or "").strip()
+
+    tabelas = {
+        "obra": "obras",
+        "servico": "servicos",
+        "insumo": "insumos",
+        "funcao": "funcoes",
+    }
+
+    if tipo not in tabelas or not nome:
+        return redirect("/cadastros?m=err:Dados invalidos.")
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(f"DELETE FROM {tabelas[tipo]} WHERE nome=%s", (nome,))
+        conn.commit()
+        msg = "ok:Cadastro excluido!"
+    except:
+        conn.rollback()
+        msg = "err:Nao foi possivel excluir."
+    cur.close()
+    conn.close()
+    return redirect("/cadastros?m=" + msg)
+
+
+@app.route("/cadastros", methods=["GET", "POST"])
 def cadastros():
-    if not require_login() or not is_admin(): return redirect("/")
-    conn=get_db();cur=conn.cursor();msg=""
-    if request.method=="POST":
+    if not require_login() or not is_admin():
+        return redirect("/")
+    conn = get_db()
+    cur = conn.cursor()
+    msg = request.args.get("m", "") or ""
+
+    if request.method == "POST":
         require_csrf()
-        if request.form.get("obra","").strip():
-            try: cur.execute("INSERT INTO obras (nome) VALUES (%s)",(request.form["obra"].strip(),));conn.commit();msg="ok:Obra cadastrada!"
-            except: conn.rollback();msg="err:Obra ja existe."
-        if request.form.get("servico","").strip() and request.form.get("unidade","").strip():
-            try: cur.execute("INSERT INTO servicos (nome,unidade) VALUES (%s,%s)",(request.form["servico"].strip(),request.form["unidade"].strip()));conn.commit();msg="ok:Servico cadastrado!"
-            except: conn.rollback();msg="err:Servico ja existe."
-        if request.form.get("insumo","").strip() and request.form.get("unidade_insumo","").strip():
-            try: cur.execute("INSERT INTO insumos (nome,unidade) VALUES (%s,%s)",(request.form["insumo"].strip(),request.form["unidade_insumo"].strip()));conn.commit();msg="ok:Insumo cadastrado!"
-            except: conn.rollback();msg="err:Insumo ja existe."
-        if request.form.get("funcao","").strip():
-            try: cur.execute("INSERT INTO funcoes (nome) VALUES (%s)",(request.form["funcao"].strip(),));conn.commit();msg="ok:Funcao cadastrada!"
-            except: conn.rollback();msg="err:Funcao ja existe."
-    cur.execute("SELECT nome FROM obras ORDER BY nome");obras=[o[0] for o in cur.fetchall()]
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome");servicos=cur.fetchall()
-    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome");insumos=cur.fetchall()
-    cur.execute("SELECT nome FROM funcoes ORDER BY nome");funcoes=[f[0] for f in cur.fetchall()]
-    cur.close();conn.close()
-    def lst(items, lbl=False, sid=""):
+        if request.form.get("obra", "").strip():
+            try:
+                cur.execute("INSERT INTO obras (nome) VALUES (%s)", (request.form["obra"].strip(),))
+                conn.commit()
+                msg = "ok:Obra cadastrada!"
+            except:
+                conn.rollback()
+                msg = "err:Obra ja existe."
+        if request.form.get("servico", "").strip() and request.form.get("unidade", "").strip():
+            try:
+                cur.execute(
+                    "INSERT INTO servicos (nome,unidade) VALUES (%s,%s)",
+                    (request.form["servico"].strip(), request.form["unidade"].strip()),
+                )
+                conn.commit()
+                msg = "ok:Servico cadastrado!"
+            except:
+                conn.rollback()
+                msg = "err:Servico ja existe."
+        if request.form.get("insumo", "").strip() and request.form.get("unidade_insumo", "").strip():
+            try:
+                cur.execute(
+                    "INSERT INTO insumos (nome,unidade) VALUES (%s,%s)",
+                    (request.form["insumo"].strip(), request.form["unidade_insumo"].strip()),
+                )
+                conn.commit()
+                msg = "ok:Insumo cadastrado!"
+            except:
+                conn.rollback()
+                msg = "err:Insumo ja existe."
+        if request.form.get("funcao", "").strip():
+            try:
+                cur.execute("INSERT INTO funcoes (nome) VALUES (%s)", (request.form["funcao"].strip(),))
+                conn.commit()
+                msg = "ok:Funcao cadastrada!"
+            except:
+                conn.rollback()
+                msg = "err:Funcao ja existe."
+
+    cur.execute("SELECT nome FROM obras ORDER BY nome")
+    obras = [o[0] for o in cur.fetchall()]
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM servicos ORDER BY nome")
+    servicos = cur.fetchall()
+    cur.execute("SELECT nome,COALESCE(unidade,'un') FROM insumos ORDER BY nome")
+    insumos = cur.fetchall()
+    cur.execute("SELECT nome FROM funcoes ORDER BY nome")
+    funcoes = [f[0] for f in cur.fetchall()]
+
+    # contagens de uso para aviso no excluir (mas permite excluir)
+    cur.execute("SELECT obra, COUNT(*) FROM produtividade GROUP BY obra")
+    uso_obras = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+
+    cur.execute("SELECT servico, COUNT(*) FROM produtividade GROUP BY servico")
+    uso_servicos = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+
+    cur.execute("""
+      SELECT k, COUNT(*)
+      FROM produtividade, LATERAL jsonb_object_keys(funcoes) AS k
+      GROUP BY k
+    """)
+    uso_funcoes = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+
+    cur.execute("""
+      SELECT k, COUNT(*)
+      FROM produtividade, LATERAL jsonb_object_keys(insumos) AS k
+      GROUP BY k
+    """)
+    uso_insumos = {r[0]: int(r[1]) for r in cur.fetchall() if r[0]}
+
+    cur.close()
+    conn.close()
+
+    def get_uso(tipo, nome):
+        if tipo == "obra":
+            return uso_obras.get(nome, 0)
+        if tipo == "servico":
+            return uso_servicos.get(nome, 0)
+        if tipo == "insumo":
+            return uso_insumos.get(nome, 0)
+        if tipo == "funcao":
+            return uso_funcoes.get(nome, 0)
+        return 0
+
+    def lst(items, lbl=False, sid="", tipo=""):
         count = len(items)
-        if not items: return '<div class="mini" style="margin-top:8px;">Nenhum cadastrado.</div>'
-        ih = "<ul class='clist'>"+"".join([f"<li>{(i[0]+' ('+i[1]+')') if lbl else i}</li>" for i in items])+"</ul>"
-        return f'<div class="acc" id="acc-{sid}"><button type="button" class="acc-btn" onclick="togAcc(\'acc-{sid}\')"><span>{count} cadastrado{"s" if count!=1 else ""}</span><span class="acc-arr">▼</span></button><div class="acc-body" style="display:none;">{ih}</div></div>'
-    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+        if not items:
+            return '<div class="mini" style="margin-top:8px;">Nenhum cadastrado.</div>'
+
+        lis = ""
+        for i in items:
+            if lbl:
+                nome = i[0]
+                texto = f"{i[0]} ({i[1]})"
+            else:
+                nome = i
+                texto = i
+
+            usado = get_uso(tipo, nome)
+            msg_confirm = (
+                f"Este cadastro ja foi usado em {usado} registro(s). Excluir mesmo?"
+                if usado > 0
+                else "Excluir?"
+            )
+
+            lis += f"""
+            <li style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{texto}</span>
+              <form method="POST" action="/cadastros/excluir" style="margin:0;display:inline;">
+                <input type="hidden" name="_csrf" value="{csrf_token()}">
+                <input type="hidden" name="tipo" value="{tipo}">
+                <input type="hidden" name="nome" value="{nome}">
+                <button class="btn-sm btn-del" onclick="return confirm('{msg_confirm}')">Excluir</button>
+              </form>
+            </li>
+            """
+
+        ih = "<ul class='clist'>" + lis + "</ul>"
+        return f"""
+        <div class="acc" id="acc-{sid}">
+          <button type="button" class="acc-btn" onclick="togAcc('acc-{sid}')">
+            <span>{count} cadastrado{"s" if count!=1 else ""}</span>
+            <span class="acc-arr">▼</span>
+          </button>
+          <div class="acc-body" style="display:none;">{ih}</div>
+        </div>
+        """
+
+    c = f"""<a href="/dashboard" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card"><div class="ctitle">Obras</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <div style="display:flex;gap:8px;"><input type="text" name="obra" placeholder="Nome da obra" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(obras, sid="obras")}</div>
+      {lst(obras, sid="obras", tipo="obra")}</div>
     <div class="card"><div class="ctitle">Servicos</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <input type="text" name="servico" placeholder="Nome do servico" required>
         <div style="display:flex;gap:8px;"><input type="text" name="unidade" placeholder="Unidade (m2, m3, un...)" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(servicos, lbl=True, sid="servicos")}</div>
+      {lst(servicos, lbl=True, sid="servicos", tipo="servico")}</div>
     <div class="card"><div class="ctitle">Insumos</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <input type="text" name="insumo" placeholder="Nome do insumo" required>
         <div style="display:flex;gap:8px;"><input type="text" name="unidade_insumo" placeholder="Unidade (kg, m, saco...)" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(insumos, lbl=True, sid="insumos")}</div>
+      {lst(insumos, lbl=True, sid="insumos", tipo="insumo")}</div>
     <div class="card"><div class="ctitle">Funcoes</div>
       <form method="POST"><input type="hidden" name="_csrf" value="{csrf_token()}">
         <div style="display:flex;gap:8px;"><input type="text" name="funcao" placeholder="Ex: Armador, Pedreiro" required style="margin-bottom:0;"><button class="btn btn-gold" style="width:auto;padding:12px 16px;white-space:nowrap;">+ Add</button></div></form>
-      {lst(funcoes, sid="funcoes")}</div>"""
+      {lst(funcoes, sid="funcoes", tipo="funcao")}</div>"""
     return render(c)
 
 
 @app.route("/usuarios")
 def usuarios():
-    if not require_login() or not is_admin(): return redirect("/")
-    conn=get_db();cur=conn.cursor()
+    if not require_login() or not is_admin():
+        return redirect("/")
+    conn = get_db()
+    cur = conn.cursor()
     cur.execute("SELECT id,nome,email,tipo FROM usuarios ORDER BY id")
-    users=cur.fetchall();cur.close();conn.close()
-    rows=""
-    for uid,nome,email,tipo in users:
-        dis="disabled" if uid==session["user_id"] else ""
-        rows+=f'<tr><td>{nome}</td><td style="font-size:.75rem;color:#6b7280;">{email}</td><td><span style="font-size:.7rem;font-weight:700;text-transform:uppercase;color:{"#C9933A" if tipo=="admin" else "#6b7280"};">{tipo}</span></td><td><div style="display:flex;gap:5px;flex-wrap:wrap;"><a class="btn-sm btn-edit" href="/usuarios/reset_senha/{uid}">Senha</a><form method="POST" action="/usuarios/excluir" style="display:inline;"><input type="hidden" name="_csrf" value="{csrf_token()}"><input type="hidden" name="id" value="{uid}"><button class="btn-sm btn-del" {dis} onclick="return confirm(\'Excluir?\')">Excluir</button></form></div></td></tr>'
-    c=f"""<a href="/dashboard" class="back">← Voltar</a>
+    users = cur.fetchall()
+    cur.close()
+    conn.close()
+    rows = ""
+    for uid, nome, email, tipo in users:
+        dis = "disabled" if uid == session["user_id"] else ""
+        rows += f'<tr><td>{nome}</td><td style="font-size:.75rem;color:#6b7280;">{email}</td><td><span style="font-size:.7rem;font-weight:700;text-transform:uppercase;color:{"#C9933A" if tipo=="admin" else "#6b7280"};">{tipo}</span></td><td><div style="display:flex;gap:5px;flex-wrap:wrap;"><a class="btn-sm btn-edit" href="/usuarios/reset_senha/{uid}">Senha</a><form method="POST" action="/usuarios/excluir" style="display:inline;"><input type="hidden" name="_csrf" value="{csrf_token()}"><input type="hidden" name="id" value="{uid}"><button class="btn-sm btn-del" {dis} onclick="return confirm(\\'Excluir?\\')">Excluir</button></form></div></td></tr>'
+    c = f"""<a href="/dashboard" class="back">← Voltar</a>
     <div class="card"><div class="ctitle">Usuarios</div>
       <div style="overflow-x:auto;"><table class="utable"><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Acoes</th></tr></thead><tbody>{rows}</tbody></table></div>
     </div>"""
@@ -723,36 +1055,54 @@ def usuarios():
 
 @app.route("/usuarios/excluir", methods=["POST"])
 def usuarios_excluir():
-    if not require_login() or not is_admin(): return redirect("/")
+    if not require_login() or not is_admin():
+        return redirect("/")
     require_csrf()
-    try: uid=int(request.form.get("id","0"))
-    except: uid=0
-    if uid<=0 or uid==session["user_id"]: return redirect("/usuarios")
-    conn=get_db();cur=conn.cursor()
-    cur.execute("DELETE FROM usuarios WHERE id=%s",(uid,))
-    conn.commit();cur.close();conn.close();return redirect("/usuarios")
+    try:
+        uid = int(request.form.get("id", "0"))
+    except:
+        uid = 0
+    if uid <= 0 or uid == session["user_id"]:
+        return redirect("/usuarios")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM usuarios WHERE id=%s", (uid,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return redirect("/usuarios")
 
 
-@app.route("/usuarios/reset_senha/<int:uid>", methods=["GET","POST"])
+@app.route("/usuarios/reset_senha/<int:uid>", methods=["GET", "POST"])
 def usuarios_reset_senha(uid):
-    if not require_login() or not is_admin(): return redirect("/")
-    conn=get_db();cur=conn.cursor()
-    cur.execute("SELECT id,nome,email,tipo FROM usuarios WHERE id=%s",(uid,))
-    user=cur.fetchone()
-    if not user: cur.close();conn.close();abort(404)
-    msg=""
-    if request.method=="POST":
+    if not require_login() or not is_admin():
+        return redirect("/")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id,nome,email,tipo FROM usuarios WHERE id=%s", (uid,))
+    user = cur.fetchone()
+    if not user:
+        cur.close()
+        conn.close()
+        abort(404)
+    msg = ""
+    if request.method == "POST":
         require_csrf()
-        n=request.form.get("nova_senha","").strip();n2=request.form.get("nova_senha2","").strip()
-        if n!=n2: msg="err:As senhas nao conferem."
+        n = request.form.get("nova_senha", "").strip()
+        n2 = request.form.get("nova_senha2", "").strip()
+        if n != n2:
+            msg = "err:As senhas nao conferem."
         else:
-            ok,m=password_policy_ok(n)
-            if not ok: msg=f"err:{m}"
+            ok, m = password_policy_ok(n)
+            if not ok:
+                msg = f"err:{m}"
             else:
-                cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s",(generate_password_hash(n),uid))
-                conn.commit();msg="ok:Senha resetada!"
-    cur.close();conn.close()
-    c=f"""<a href="/usuarios" class="back">← Voltar</a>
+                cur.execute("UPDATE usuarios SET senha=%s WHERE id=%s", (generate_password_hash(n), uid))
+                conn.commit()
+                msg = "ok:Senha resetada!"
+    cur.close()
+    conn.close()
+    c = f"""<a href="/usuarios" class="back">← Voltar</a>
     {alert(msg)}
     <div class="card"><div class="ctitle">Resetar Senha</div>
       <div class="mini" style="margin-bottom:14px;">Usuario: <strong>{user[1]}</strong> — {user[2]}</div>
@@ -769,43 +1119,92 @@ def usuarios_reset_senha(uid):
 
 @app.route("/exportar")
 def exportar():
-    if not require_login() or not is_admin(): return redirect("/dashboard")
-    conn=get_db();cur=conn.cursor()
-    cur.execute("SELECT p.id,p.obra,p.servico,p.servico_unidade,p.quantidade,p.horas,p.funcoes,p.insumos,p.observacao,p.data,p.user_id,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC")
-    dados=cur.fetchall();cur.close();conn.close()
-    wb=Workbook();ws=wb.active;ws.title="Dados"
-    ws.append(["registro_id","data","obra","servico","servico_unidade","quantidade_servico","horas","horas_por_unidade_servico","observacao","user_id","usuario_nome","tipo_item","item_nome","item_qtd","item_unidade","homem_hora"])
+    if not require_login() or not is_admin():
+        return redirect("/dashboard")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT p.id,p.obra,p.servico,p.servico_unidade,p.quantidade,p.horas,p.funcoes,p.insumos,p.observacao,p.data,p.user_id,u.nome FROM produtividade p LEFT JOIN usuarios u ON u.id=p.user_id ORDER BY p.id DESC"
+    )
+    dados = cur.fetchall()
+    cur.close()
+    conn.close()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Dados"
+    ws.append(
+        [
+            "registro_id",
+            "data",
+            "obra",
+            "servico",
+            "servico_unidade",
+            "quantidade_servico",
+            "horas",
+            "horas_por_unidade_servico",
+            "observacao",
+            "user_id",
+            "usuario_nome",
+            "tipo_item",
+            "item_nome",
+            "item_qtd",
+            "item_unidade",
+            "homem_hora",
+        ]
+    )
     for row in dados:
-        (rid,obra,servico,su,qtd,hrs,fr,ir,obs,data,uid,unom)=row
-        try: hpu=(float(hrs)/float(qtd)) if float(qtd)!=0 else 0
-        except: hpu=0
-        fu=safe_json_load(fr) or {};iu=safe_json_load(ir) or {}
-        wrote=False
-        if isinstance(fu,dict):
-            for fn,fq in fu.items():
-                try: qi=int(fq)
-                except: qi=0
-                if not fn or qi<=0: continue
-                try: hh=float(hrs)*float(qi)
-                except: hh=0
-                ws.append([rid,data,obra,servico,su,qtd,hrs,hpu,obs,uid,unom or "","FUNCAO",str(fn),qi,"",hh]);wrote=True
-        if isinstance(iu,dict):
-            for inn,iv in iu.items():
-                if not inn: continue
-                if isinstance(iv,dict): iq=iv.get("quantidade","");iu2=iv.get("unidade","")
+        (rid, obra, servico, su, qtd, hrs, fr, ir, obs, data, uid, unom) = row
+        try:
+            hpu = (float(hrs) / float(qtd)) if float(qtd) != 0 else 0
+        except:
+            hpu = 0
+        fu = safe_json_load(fr) or {}
+        iu = safe_json_load(ir) or {}
+        wrote = False
+        if isinstance(fu, dict):
+            for fn, fq in fu.items():
+                try:
+                    qi = int(fq)
+                except:
+                    qi = 0
+                if not fn or qi <= 0:
+                    continue
+                try:
+                    hh = float(hrs) * float(qi)
+                except:
+                    hh = 0
+                ws.append([rid, data, obra, servico, su, qtd, hrs, hpu, obs, uid, unom or "", "FUNCAO", str(fn), qi, "", hh])
+                wrote = True
+        if isinstance(iu, dict):
+            for inn, iv in iu.items():
+                if not inn:
+                    continue
+                if isinstance(iv, dict):
+                    iq = iv.get("quantidade", "")
+                    iu2 = iv.get("unidade", "")
                 else:
-                    parts=str(iv).strip().split();iq=parts[0] if parts else "";iu2=" ".join(parts[1:]) if len(parts)>1 else ""
-                try: qn=float(iq)
-                except: qn=0.0
-                if qn<=0: continue
-                ws.append([rid,data,obra,servico,su,qtd,hrs,hpu,obs,uid,unom or "","INSUMO",str(inn),qn,str(iu2),""]);wrote=True
-        if not wrote: ws.append([rid,data,obra,servico,su,qtd,hrs,hpu,obs,uid,unom or "","REGISTRO","","","",""])
-    out=BytesIO();wb.save(out);out.seek(0)
-    return send_file(out,download_name="produtividade_powerbi.xlsx",as_attachment=True)
+                    parts = str(iv).strip().split()
+                    iq = parts[0] if parts else ""
+                    iu2 = " ".join(parts[1:]) if len(parts) > 1 else ""
+                try:
+                    qn = float(iq)
+                except:
+                    qn = 0.0
+                if qn <= 0:
+                    continue
+                ws.append([rid, data, obra, servico, su, qtd, hrs, hpu, obs, uid, unom or "", "INSUMO", str(inn), qn, str(iu2), ""])
+                wrote = True
+        if not wrote:
+            ws.append([rid, data, obra, servico, su, qtd, hrs, hpu, obs, uid, unom or "", "REGISTRO", "", "", "", ""])
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return send_file(out, download_name="produtividade_powerbi.xlsx", as_attachment=True)
 
 
-if __name__=="__main__":
-    port=int(os.environ.get("PORT","5000"))
-    app.run(host="0.0.0.0",port=port,debug=False)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
