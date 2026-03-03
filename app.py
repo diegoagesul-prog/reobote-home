@@ -363,16 +363,19 @@ BASE = """<!DOCTYPE html>
 body{background:var(--bg);font-family:'Inter',sans-serif;color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;}
 
 /* HEADER */
-.hdr{background:var(--dark);height:56px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;border-bottom:2px solid var(--gold);}
-.hdr-brand{display:flex;align-items:center;gap:9px;}
-.hdr-logo{height:30px;width:auto;}
-.hdr-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.05rem;color:var(--gold);letter-spacing:.07em;line-height:1;}
-.hdr-sub{font-size:.58rem;color:rgba(255,255,255,.35);letter-spacing:.12em;text-transform:uppercase;display:block;margin-top:2px;}
-.hdr-right{text-align:right;}
-.hdr-uname{font-size:.72rem;font-weight:600;color:#fff;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;}
-.hdr-links{display:flex;gap:6px;justify-content:flex-end;margin-top:2px;flex-wrap:wrap;}
-.hdr-links a{font-size:.65rem;color:var(--gold);text-decoration:none;font-weight:500;}
-.hdr-links a:hover{color:var(--gold-l);}
+.hdr{background:var(--dark);padding:0 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;border-bottom:2px solid var(--gold);min-height:52px;}
+.hdr-brand{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.hdr-logo{height:28px;width:auto;}
+.hdr-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.95rem;color:var(--gold);letter-spacing:.07em;line-height:1;}
+.hdr-sub{font-size:.52rem;color:rgba(255,255,255,.35);letter-spacing:.1em;text-transform:uppercase;display:block;margin-top:2px;}
+.hdr-right{display:flex;flex-direction:column;align-items:flex-end;gap:5px;min-width:0;}
+.hdr-uname{font-size:.68rem;font-weight:600;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
+.hdr-links{display:flex;gap:4px;align-items:center;}
+.hdr-links a.tab{font-size:.7rem;color:var(--gold);text-decoration:none;font-weight:700;padding:5px 9px;border-radius:7px;border:1.5px solid var(--gold-d);background:rgba(201,147,58,.1);letter-spacing:.04em;white-space:nowrap;transition:background .15s,color .15s;}
+.hdr-links a.tab:hover,.hdr-links a.tab.active{background:var(--gold);color:var(--dark);}
+.hdr-links a.util{font-size:.62rem;color:rgba(255,255,255,.45);text-decoration:none;font-weight:500;padding:3px 5px;white-space:nowrap;}
+.hdr-links a.util:hover{color:rgba(255,255,255,.8);}
+.hdr-sep{color:rgba(255,255,255,.2);font-size:.65rem;}
 
 /* WRAP */
 .wrap{max-width:540px;margin:0 auto;padding:14px 12px 72px;}
@@ -488,20 +491,18 @@ textarea{resize:vertical;min-height:74px;}
   <div class="hdr-brand">
     <img src="/static/logo.png" class="hdr-logo" alt="Reobote">
     <div>
-      <div class="hdr-name">REOBOTE HOME</div>
-      <span class="hdr-sub">Produtividade &amp; Consumo</span>
+      <div class="hdr-name">REOBOTE</div>
+      <span class="hdr-sub">Home</span>
     </div>
   </div>
   <div class="hdr-right">
     <div class="hdr-uname">{{ session.get("nome","") }}</div>
     <div class="hdr-links">
-      <a href="/dashboard">Registros</a>
-      <span style="color:#374151">|</span>
-      <a href="/efetivo">Custo de Efetivo</a>
-      <span style="color:#374151">|</span>
-      <a href="/minha_senha">Senha</a>
-      <span style="color:#374151">|</span>
-      <a href="/logout">Sair</a>
+      <a href="/dashboard" class="tab {% if current_page=='produtividade' %}active{% endif %}">Produtividade</a>
+      <a href="/efetivo" class="tab {% if current_page=='efetivo' %}active{% endif %}">Custo de Efetivo</a>
+      <span class="hdr-sep">|</span>
+      <a href="/minha_senha" class="util">Senha</a>
+      <a href="/logout" class="util">Sair</a>
     </div>
   </div>
 </header>
@@ -600,8 +601,8 @@ document.addEventListener("DOMContentLoaded",()=>{
 </html>"""
 
 
-def render(conteudo, show_header=True):
-    return render_template_string(BASE, conteudo=conteudo, show_header=show_header, session=session)
+def render(conteudo, show_header=True, page=""):
+    return render_template_string(BASE, conteudo=conteudo, show_header=show_header, session=session, current_page=page)
 
 
 def alert(msg):
@@ -953,7 +954,7 @@ def dashboard():
       {rcs if rcs else '<div class="mini" style="padding:10px 0;">Nenhum registro ainda.</div>'}
     </div>
     {adm}"""
-    return render(c)
+    return render(c, page="produtividade")
 
 
 @app.route("/produtividade/editar/<int:rid>", methods=["GET", "POST"])
@@ -1131,7 +1132,7 @@ def produtividade_editar(rid):
         <button class="btn btn-gold">Salvar Alteracoes</button>
       </form>
     </div>"""
-    return render(c)
+    return render(c, page="produtividade")
 
 
 @app.route("/produtividade/excluir/<int:rid>", methods=["POST"])
@@ -1578,7 +1579,7 @@ def efetivo_index():
       <div class="ctitle">Meus Planejamentos</div>
       {cards if cards else "<div class='mini'>Nenhum planejamento ainda.</div>"}
     </div>"""
-    return render(c)
+    return render(c, page="efetivo")
 
 
 # -------------------------
@@ -1675,7 +1676,7 @@ def efetivo_novo():
         <button class="btn btn-gold">Criar / Abrir</button>
       </form>
     </div>"""
-    return render(c)
+    return render(c, page="efetivo")
 
 
 def load_costs_for_obra(obra_id: int):
@@ -1863,7 +1864,7 @@ def efetivo_editar(eid):
       {del_btn_inline}
       <div class="mini" style="margin-top:10px;">Obs: o custo usado aqui fica congelado (snapshot) para este mes, mesmo que o admin altere os custos futuramente.</div>
     </div>"""
-    return render(c)
+    return render(c, page="efetivo")
 
 
 # -------------------------
@@ -1983,7 +1984,7 @@ def efetivo_custos():
     </div>
     {table_html}
     """
-    return render(c)
+    return render(c, page="efetivo")
 
 
 # -------------------------
