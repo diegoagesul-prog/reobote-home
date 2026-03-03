@@ -369,11 +369,11 @@ body{background:var(--bg);font-family:'Inter',sans-serif;color:var(--text);min-h
 .hdr-logo{height:26px;width:auto;}
 .hdr-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.9rem;color:var(--gold);letter-spacing:.07em;line-height:1;}
 .hdr-sub{font-size:.5rem;color:rgba(255,255,255,.3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-top:1px;}
-.hdr-utils{display:flex;gap:2px;align-items:center;}
-.hdr-uname{font-size:.65rem;font-weight:600;color:rgba(255,255,255,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;margin-right:6px;}
-.hdr-utils a.util{font-size:.63rem;color:rgba(255,255,255,.4);text-decoration:none;font-weight:500;padding:3px 6px;white-space:nowrap;}
+.hdr-utils{display:flex;gap:2px;align-items:center;min-width:0;}
+.hdr-uname{font-size:.62rem;font-weight:600;color:rgba(255,255,255,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;margin-right:4px;}
+.hdr-utils a.util{font-size:.62rem;color:rgba(255,255,255,.4);text-decoration:none;font-weight:500;padding:3px 4px;white-space:nowrap;flex-shrink:0;}
 .hdr-utils a.util:hover{color:rgba(255,255,255,.8);}
-.hdr-utils .hdr-sep{color:rgba(255,255,255,.15);font-size:.65rem;}
+.hdr-utils .hdr-sep{color:rgba(255,255,255,.15);font-size:.65rem;flex-shrink:0;}
 .hdr-tabs{display:flex;gap:6px;padding-bottom:8px;}
 .hdr-tabs a.tab{flex:1;text-align:center;font-size:.75rem;color:var(--gold);text-decoration:none;font-weight:700;padding:7px 6px;border-radius:8px;border:1.5px solid var(--gold-d);background:rgba(201,147,58,.1);letter-spacing:.04em;white-space:nowrap;transition:background .15s,color .15s;}
 .hdr-tabs a.tab:hover,.hdr-tabs a.tab.active{background:var(--gold);color:var(--dark);border-color:var(--gold);}
@@ -498,10 +498,9 @@ textarea{resize:vertical;min-height:74px;}
       </div>
     </div>
     <div class="hdr-utils">
-      <span class="hdr-uname">{{ session.get("nome","") }}</span>
-      <a href="/minha_senha" class="util">Senha</a>
-      <span class="hdr-sep">|</span>
-      <a href="/logout" class="util">Sair</a>
+      <span class="hdr-uname" title="{{ session.get('nome','') }}">{{ session.get("nome","") }}</span>
+      <a href="/minha_senha" class="util" title="Senha">🔑</a>
+      <a href="/logout" class="util" title="Sair">⏻</a>
     </div>
   </div>
   <div class="hdr-tabs">
@@ -2225,7 +2224,6 @@ def exportar():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False)
-
 
 
 
