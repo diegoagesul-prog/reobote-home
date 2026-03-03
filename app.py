@@ -49,7 +49,6 @@ def get_db():
     db_url = _normalize_db_url(db_url)
 
     if DB_POOL is None:
-        # Para seu cenário (poucos usuários), 1..10 conexões está ótimo
         DB_POOL = SimpleConnectionPool(1, 10, db_url)
 
     return DB_POOL.getconn()
@@ -121,21 +120,15 @@ def fmt_num(x, dec=2):
 
 
 def parse_month(s: str) -> str:
-    """
-    Normaliza mês para YYYY-MM.
-    Aceita YYYY-MM e tenta corrigir entradas simples.
-    """
     s = (s or "").strip()
     if not s:
         return ""
-    # já vem certo
     if len(s) == 7 and s[4] == "-" and s[:4].isdigit() and s[5:].isdigit():
         y = int(s[:4])
         m = int(s[5:])
         if 1 <= m <= 12 and 2000 <= y <= 2100:
             return f"{y:04d}-{m:02d}"
         return ""
-    # tenta "MM/YYYY"
     if "/" in s:
         parts = s.split("/")
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -236,7 +229,6 @@ def init_db():
         cur.execute("CREATE TABLE IF NOT EXISTS insumos (id SERIAL PRIMARY KEY, nome TEXT UNIQUE, unidade TEXT);")
         cur.execute("CREATE TABLE IF NOT EXISTS funcoes (id SERIAL PRIMARY KEY, nome TEXT UNIQUE);")
 
-        # Permissões de obra por usuário
         cur.execute(
             "CREATE TABLE IF NOT EXISTS usuario_obras ("
             "id SERIAL PRIMARY KEY, "
@@ -246,7 +238,6 @@ def init_db():
             ");"
         )
 
-        # Produtividade
         cur.execute(
             "CREATE TABLE IF NOT EXISTS produtividade ("
             "id SERIAL PRIMARY KEY, "
@@ -263,7 +254,6 @@ def init_db():
             ");"
         )
 
-        # Custo de efetivo (por obra x função)
         cur.execute(
             "CREATE TABLE IF NOT EXISTS custos_funcao_obra ("
             "id SERIAL PRIMARY KEY, "
@@ -274,14 +264,13 @@ def init_db():
             ");"
         )
 
-        # Planejamento mensal (snapshot de custos + qtd)
         cur.execute(
             "CREATE TABLE IF NOT EXISTS efetivo_planejamentos ("
             "id SERIAL PRIMARY KEY, "
             "obra_id INTEGER, "
             "user_id INTEGER, "
-            "mes TEXT, "  # YYYY-MM
-            "itens JSONB, "  # snapshot {funcao_id, funcao_nome, custo_mensal, qtd, subtotal}[]
+            "mes TEXT, "
+            "itens JSONB, "
             "total DOUBLE PRECISION, "
             "created_at TEXT, "
             "updated_at TEXT, "
@@ -289,7 +278,6 @@ def init_db():
             ");"
         )
 
-        # cria admin se passar env
         ae = os.environ.get("ADMIN_EMAIL")
         ap = os.environ.get("ADMIN_PASSWORD")
         if ae and ap:
@@ -595,7 +583,6 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(is_&&!tsI)tsI=new TomSelect("#ins_select",{create:false,placeholder:"Buscar insumo...",allowEmptyOption:true,maxItems:1,sortField:{field:"text",direction:"asc"},onChange:function(){updInsUnid();}});
   updInsUnid();
 
-  // Efetivo calc
   const ef=document.getElementById('ef_form');
   if(ef){
     ef.addEventListener('input', (e)=>{
@@ -1180,7 +1167,7 @@ def criar_usuario():
         return redirect("/")
     msg = ""
 
-    obras_all = get_all_obras()  # [(id,nome),...]
+    obras_all = get_all_obras()
 
     if request.method == "POST":
         require_csrf()
@@ -1188,7 +1175,7 @@ def criar_usuario():
         email = request.form.get("email", "").strip().lower()
         senha = request.form.get("senha", "").strip()
         tipo = request.form.get("tipo", "usuario")
-        obras_sel = request.form.getlist("obras_sel[]")  # ids (strings)
+        obras_sel = request.form.getlist("obras_sel[]")
 
         ok, m = password_policy_ok(senha)
         if not ok:
@@ -1203,7 +1190,6 @@ def criar_usuario():
                 )
                 uid = cur.fetchone()[0]
 
-                # atribui obras selecionadas
                 for oid in obras_sel:
                     try:
                         oid_i = int(oid)
@@ -1558,6 +1544,17 @@ def efetivo_index():
     cards = ""
     for rid, mes, total, upd, obra_nome, user_nome in rows:
         who = f"<span class='mini' style='margin-left:auto;'>{user_nome or ''}</span>" if is_admin() else ""
+
+        # Botão excluir — apenas para admin
+        del_btn = ""
+        if is_admin():
+            del_btn = (
+                f"<form method='POST' action='/efetivo/excluir/{rid}' style='display:inline;'>"
+                f"<input type='hidden' name='_csrf' value='{csrf_token()}'>"
+                f"<button class='btn-sm btn-del' onclick=\"return confirm('Excluir planejamento {obra_nome} — {mes}?')\">Excluir</button>"
+                f"</form>"
+            )
+
         cards += (
             "<div class='rc'>"
             f"<div class='rc-top'><div class='rc-obra'>{obra_nome}</div><div class='rc-date'>{mes}</div></div>"
@@ -1566,6 +1563,7 @@ def efetivo_index():
             f"<div class='rc-act'>"
             f"<a class='btn-sm btn-edit' href='/efetivo/editar/{rid}'>Abrir</a>"
             f"<a class='btn-sm btn-edit' href='/efetivo/pdf/{rid}'>PDF</a>"
+            f"{del_btn}"
             f"</div></div>"
         )
 
@@ -1581,6 +1579,27 @@ def efetivo_index():
       {cards if cards else "<div class='mini'>Nenhum planejamento ainda.</div>"}
     </div>"""
     return render(c)
+
+
+# -------------------------
+# Excluir Planejamento (admin only)
+# -------------------------
+@app.route("/efetivo/excluir/<int:eid>", methods=["POST"])
+def efetivo_excluir(eid):
+    if not require_login() or not is_admin():
+        abort(403)
+    require_csrf()
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM efetivo_planejamentos WHERE id=%s", (eid,))
+        conn.commit()
+    finally:
+        cur.close()
+        put_db(conn)
+
+    return redirect("/efetivo")
 
 
 @app.route("/efetivo/novo", methods=["GET", "POST"])
@@ -1607,7 +1626,6 @@ def efetivo_novo():
         elif (not is_admin()) and (not user_can_use_obra_id(session["user_id"], obra_id)):
             msg = "err:Voce nao tem permissao para essa obra."
         else:
-            # cria (ou abre existente)
             conn = get_db()
             cur = conn.cursor()
             try:
@@ -1661,10 +1679,6 @@ def efetivo_novo():
 
 
 def load_costs_for_obra(obra_id: int):
-    """
-    Retorna lista de funções com custo configurado (ou 0).
-    [(funcao_id, funcao_nome, custo_mensal)]
-    """
     conn = get_db()
     cur = conn.cursor()
     try:
@@ -1703,7 +1717,6 @@ def efetivo_editar(eid):
         if not is_admin() and int(user_id) != int(session["user_id"]):
             abort(403)
 
-        # permissão por obra (usuário)
         if not is_admin():
             if not user_can_use_obra_id(session["user_id"], obra_id):
                 abort(403)
@@ -1711,11 +1724,9 @@ def efetivo_editar(eid):
         cur.execute("SELECT nome FROM obras WHERE id=%s", (obra_id,))
         obra_nome = (cur.fetchone() or [""])[0]
 
-        # lista de funções + custo atual
         funcs = load_costs_for_obra(obra_id)
 
         itens_list = safe_json_load(itens) or []
-        # mapear qtd existente por funcao_id
         qtd_map = {}
         custo_snapshot_map = {}
         if isinstance(itens_list, list):
@@ -1737,7 +1748,6 @@ def efetivo_editar(eid):
         msg = ""
         if request.method == "POST":
             require_csrf()
-            # recebe arrays alinhados: funcao_id[], custo_mensal[], qtd[]
             fids = request.form.getlist("funcao_id[]")
             custos = request.form.getlist("custo_mensal[]")
             qtds = request.form.getlist("qtd[]")
@@ -1782,11 +1792,9 @@ def efetivo_editar(eid):
             conn.commit()
             msg = "ok:Planejamento salvo!"
 
-            # atualiza para exibir
             itens_list = itens_new
             total = total_new
             updated_at = now
-            # mantém qds em tela
             qtd_map = {it["funcao_id"]: it["qtd"] for it in itens_new}
             custo_snapshot_map = {it["funcao_id"]: it["custo_mensal"] for it in itens_new}
 
@@ -1794,7 +1802,6 @@ def efetivo_editar(eid):
         cur.close()
         put_db(conn)
 
-    # montar linhas: usa snapshot se já existe, senão usa custo atual
     lines = ""
     for fid, fn, custo_atual in funcs:
         custo = custo_snapshot_map.get(fid, custo_atual)
@@ -1809,6 +1816,16 @@ def efetivo_editar(eid):
             f"<input type='hidden' name='funcao_id[]' value='{fid}'>"
             f"<input type='hidden' name='custo_mensal[]' value='{custo}'>"
             f"</tr>"
+        )
+
+    # Botão excluir dentro do planejamento — apenas admin
+    del_btn_inline = ""
+    if is_admin():
+        del_btn_inline = (
+            f"<form method='POST' action='/efetivo/excluir/{eid}' style='display:inline;margin-top:10px;'>"
+            f"<input type='hidden' name='_csrf' value='{csrf_token()}'>"
+            f"<button class='btn btn-warn' style='margin-top:10px;' onclick=\"return confirm('Excluir este planejamento permanentemente?')\">Excluir Planejamento</button>"
+            f"</form>"
         )
 
     pdf_btn = f"<a class='btn btn-dark' href='/efetivo/pdf/{eid}' style='margin-top:10px;'>Gerar PDF</a>"
@@ -1843,6 +1860,7 @@ def efetivo_editar(eid):
         <button class="btn btn-gold" style="margin-top:12px;">Salvar</button>
       </form>
       {pdf_btn}
+      {del_btn_inline}
       <div class="mini" style="margin-top:10px;">Obs: o custo usado aqui fica congelado (snapshot) para este mes, mesmo que o admin altere os custos futuramente.</div>
     </div>"""
     return render(c)
@@ -1860,7 +1878,6 @@ def efetivo_custos():
     obras = get_all_obras()
     obra_id = 0
 
-    # seleciona obra via querystring ou post
     if request.method == "POST":
         require_csrf()
         try:
@@ -1920,7 +1937,7 @@ def efetivo_custos():
             cur.close()
             put_db(conn)
 
-        funcs = load_costs_for_obra(obra_id)  # inclui custo atual
+        funcs = load_costs_for_obra(obra_id)
         rows = ""
         for fid, fn, custo in funcs:
             rows += (
@@ -2026,12 +2043,10 @@ def efetivo_pdf(eid):
         cur.close()
         put_db(conn)
 
-    # Gera PDF
     out = BytesIO()
     c = canvas.Canvas(out, pagesize=A4)
     W, H = A4
 
-    # margens
     x0 = 18 * mm
     y = H - 18 * mm
 
@@ -2049,7 +2064,6 @@ def efetivo_pdf(eid):
     draw_line(f"Usuário: {user_nome}", 11, False, 6 * mm)
     draw_line(f"Criado: {created_at or ''}    Atualizado: {updated_at or ''}", 10, False, 8 * mm)
 
-    # Tabela
     c.setFont("Helvetica-Bold", 10)
     c.drawString(x0, y, "Função")
     c.drawString(x0 + 85 * mm, y, "Custo mensal")
