@@ -499,8 +499,14 @@ textarea{resize:vertical;min-height:74px;}
     </div>
     <div class="hdr-utils">
       <span class="hdr-uname" title="{{ session.get('nome','') }}">{{ session.get("nome","") }}</span>
-      <a href="/minha_senha" class="util" title="Senha">🔑</a>
-      <a href="/logout" class="util" title="Sair">⏻</a>
+      <a href="/minha_senha" class="util" title="Senha" style="font-size:1.1rem;">🔑</a>
+      <a href="/logout" class="util" title="Sair" style="display:inline-flex;align-items:center;padding:3px 4px;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </a>
     </div>
   </div>
   <div class="hdr-tabs">
