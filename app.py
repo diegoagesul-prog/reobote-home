@@ -363,19 +363,20 @@ BASE = """<!DOCTYPE html>
 body{background:var(--bg);font-family:'Inter',sans-serif;color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;}
 
 /* HEADER */
-.hdr{background:var(--dark);padding:0 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;border-bottom:2px solid var(--gold);min-height:52px;}
+.hdr{background:var(--dark);padding:6px 12px 0;position:sticky;top:0;z-index:200;border-bottom:2px solid var(--gold);}
+.hdr-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
 .hdr-brand{display:flex;align-items:center;gap:8px;flex-shrink:0;}
-.hdr-logo{height:28px;width:auto;}
-.hdr-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.95rem;color:var(--gold);letter-spacing:.07em;line-height:1;}
-.hdr-sub{font-size:.52rem;color:rgba(255,255,255,.35);letter-spacing:.1em;text-transform:uppercase;display:block;margin-top:2px;}
-.hdr-right{display:flex;flex-direction:column;align-items:flex-end;gap:5px;min-width:0;}
-.hdr-uname{font-size:.68rem;font-weight:600;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
-.hdr-links{display:flex;gap:4px;align-items:center;}
-.hdr-links a.tab{font-size:.7rem;color:var(--gold);text-decoration:none;font-weight:700;padding:5px 9px;border-radius:7px;border:1.5px solid var(--gold-d);background:rgba(201,147,58,.1);letter-spacing:.04em;white-space:nowrap;transition:background .15s,color .15s;}
-.hdr-links a.tab:hover,.hdr-links a.tab.active{background:var(--gold);color:var(--dark);}
-.hdr-links a.util{font-size:.62rem;color:rgba(255,255,255,.45);text-decoration:none;font-weight:500;padding:3px 5px;white-space:nowrap;}
-.hdr-links a.util:hover{color:rgba(255,255,255,.8);}
-.hdr-sep{color:rgba(255,255,255,.2);font-size:.65rem;}
+.hdr-logo{height:26px;width:auto;}
+.hdr-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.9rem;color:var(--gold);letter-spacing:.07em;line-height:1;}
+.hdr-sub{font-size:.5rem;color:rgba(255,255,255,.3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-top:1px;}
+.hdr-utils{display:flex;gap:2px;align-items:center;}
+.hdr-uname{font-size:.65rem;font-weight:600;color:rgba(255,255,255,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;margin-right:6px;}
+.hdr-utils a.util{font-size:.63rem;color:rgba(255,255,255,.4);text-decoration:none;font-weight:500;padding:3px 6px;white-space:nowrap;}
+.hdr-utils a.util:hover{color:rgba(255,255,255,.8);}
+.hdr-utils .hdr-sep{color:rgba(255,255,255,.15);font-size:.65rem;}
+.hdr-tabs{display:flex;gap:6px;padding-bottom:8px;}
+.hdr-tabs a.tab{flex:1;text-align:center;font-size:.75rem;color:var(--gold);text-decoration:none;font-weight:700;padding:7px 6px;border-radius:8px;border:1.5px solid var(--gold-d);background:rgba(201,147,58,.1);letter-spacing:.04em;white-space:nowrap;transition:background .15s,color .15s;}
+.hdr-tabs a.tab:hover,.hdr-tabs a.tab.active{background:var(--gold);color:var(--dark);border-color:var(--gold);}
 
 /* WRAP */
 .wrap{max-width:540px;margin:0 auto;padding:14px 12px 72px;}
@@ -488,22 +489,24 @@ textarea{resize:vertical;min-height:74px;}
 <body>
 {% if show_header %}
 <header class="hdr">
-  <div class="hdr-brand">
-    <img src="/static/logo.png" class="hdr-logo" alt="Reobote">
-    <div>
-      <div class="hdr-name">REOBOTE</div>
-      <span class="hdr-sub">Home</span>
+  <div class="hdr-top">
+    <div class="hdr-brand">
+      <img src="/static/logo.png" class="hdr-logo" alt="Reobote">
+      <div>
+        <div class="hdr-name">REOBOTE HOME</div>
+        <span class="hdr-sub">Produtividade &amp; Consumo</span>
+      </div>
     </div>
-  </div>
-  <div class="hdr-right">
-    <div class="hdr-uname">{{ session.get("nome","") }}</div>
-    <div class="hdr-links">
-      <a href="/dashboard" class="tab {% if current_page=='produtividade' %}active{% endif %}">Produtividade</a>
-      <a href="/efetivo" class="tab {% if current_page=='efetivo' %}active{% endif %}">Custo de Efetivo</a>
-      <span class="hdr-sep">|</span>
+    <div class="hdr-utils">
+      <span class="hdr-uname">{{ session.get("nome","") }}</span>
       <a href="/minha_senha" class="util">Senha</a>
+      <span class="hdr-sep">|</span>
       <a href="/logout" class="util">Sair</a>
     </div>
+  </div>
+  <div class="hdr-tabs">
+    <a href="/dashboard" class="tab {% if current_page=='produtividade' %}active{% endif %}">Produtividade</a>
+    <a href="/efetivo" class="tab {% if current_page=='efetivo' %}active{% endif %}">Custo de Efetivo</a>
   </div>
 </header>
 {% endif %}
